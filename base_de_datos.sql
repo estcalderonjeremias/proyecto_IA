@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS public.administradores (
 COMMENT ON TABLE public.administradores IS 'Usuarios con privilegios de administración vinculados con Supabase Auth';
 
 -- ------------------------------------------------------------------------------
--- 4. ÍNDICES DE RENDIMIENT
+-- 4. ÍNDICES DE RENDIMIEN
 -- ------------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_empleados_documento ON public.empleados(documento);
 CREATE INDEX IF NOT EXISTS idx_empleados_estado ON public.empleados(estado);
