@@ -1,4 +1,7 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
+  "/api/admin/excepciones/route": "app/api/admin/excepciones/route.js",
+  "/api/empleados/route": "app/api/empleados/route.js",
+  "/api/fichar/route": "app/api/fichar/route.js",
   "/page": "app/page.js"
 }
