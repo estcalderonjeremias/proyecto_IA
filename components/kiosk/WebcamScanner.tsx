@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
-import { Camera, CameraOff, Sparkles } from 'lucide-react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Camera, CameraOff, Sparkles, SwitchCamera, Smartphone } from 'lucide-react';
 
 interface WebcamScannerProps {
   onVideoReady?: (video: HTMLVideoElement) => void;
+  onSnapshotTaken?: (base64: string) => void;
   isScanning?: boolean;
   statusText?: string;
   matchScore?: number | null;
@@ -12,64 +13,121 @@ interface WebcamScannerProps {
 
 export const WebcamScanner: React.FC<WebcamScannerProps> = ({
   onVideoReady,
+  onSnapshotTaken,
   isScanning = true,
   statusText = 'Escaneando rostro...',
   matchScore = null,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+  const [stream, setStream] = useState<MediaStream | null>(null);
+
+  const startStream = useCallback(async (mode: 'user' | 'environment') => {
+    try {
+      setHasPermission(null);
+
+      // Detener pistas previas
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: mode,
+        },
+        audio: false,
+      });
+
+      setStream(newStream);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = newStream;
+        videoRef.current.onloadedmetadata = () => {
+          if (videoRef.current) {
+            videoRef.current.play().catch(() => {});
+            onVideoReady?.(videoRef.current);
+          }
+        };
+      }
+      setHasPermission(true);
+    } catch (err) {
+      console.warn('Error accediendo a la cámara:', err);
+      setHasPermission(false);
+      setErrorMessage('Acceso a la cámara denegado o no disponible en este dispositivo.');
+    }
+  }, [onVideoReady, stream]);
 
   useEffect(() => {
-    let stream: MediaStream | null = null;
-
-    const initWebcam = async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user',
-          },
-          audio: false,
-        });
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            if (videoRef.current) {
-              videoRef.current.play();
-              onVideoReady?.(videoRef.current);
-            }
-          };
-        }
-        setHasPermission(true);
-      } catch (err) {
-        console.warn('Error accediendo a la cámara web:', err);
-        setHasPermission(false);
-        setErrorMessage('Acceso a cámara denegado. Permite el uso del sensor para el reconocimiento facial.');
-      }
-    };
-
-    initWebcam();
+    startStream(facingMode);
 
     return () => {
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [onVideoReady]);
+  }, [facingMode]);
+
+  const toggleCameraFacing = () => {
+    const nextMode = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(nextMode);
+  };
+
+  // Manejar captura de imagen desde archivo/cámara nativa de celular
+  const handleMobileFileCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      if (base64 && onSnapshotTaken) {
+        onSnapshotTaken(base64);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   return (
-    <div className="relative w-full max-w-[500px] aspect-[4/3] rounded-3xl overflow-hidden bg-[#090D16] border-2 border-neon-emerald/30 shadow-card">
+    <div className="relative w-full max-w-[500px] aspect-[4/3] rounded-3xl overflow-hidden bg-[#090D16] border-2 border-neon-emerald/30 shadow-card group">
       {/* Video Element HTML5 */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className={`w-full h-full object-cover -scale-x-100 ${hasPermission ? 'block' : 'hidden'}`}
+        className={`w-full h-full object-cover ${facingMode === 'user' ? '-scale-x-100' : ''} ${
+          hasPermission ? 'block' : 'hidden'
+        }`}
       />
+
+      {/* Input oculto para cámara nativa de celular */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="user"
+        className="hidden"
+        onChange={handleMobileFileCapture}
+      />
+
+      {/* Botón Flotante para cambiar de Cámara (Frontal / Trasera para Celulares) */}
+      {hasPermission && (
+        <div className="absolute top-3 right-3 flex items-center gap-2 z-20">
+          <button
+            type="button"
+            onClick={toggleCameraFacing}
+            title={facingMode === 'user' ? 'Cambiar a cámara trasera (Celular)' : 'Cambiar a cámara frontal (Selfie)'}
+            className="p-2.5 rounded-full bg-[#111726]/80 hover:bg-[#1E2640] text-neon-green border border-neon-emerald/40 backdrop-blur-md transition-all shadow-lg active:scale-95"
+          >
+            <SwitchCamera size={18} />
+          </button>
+        </div>
+      )}
 
       {/* Marco Biométrico Activo con Neón Verde */}
       {hasPermission && (
@@ -110,11 +168,19 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         )}
       </div>
 
-      {/* Sin Permisos */}
+      {/* Sin Permisos / Botón de captura móvil alternativa */}
       {hasPermission === false && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center gap-3 text-text-muted">
+        <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center gap-3 text-text-muted bg-[#0B0F17]/95">
           <CameraOff size={42} className="text-status-error" />
           <p className="text-sm max-w-[280px]">{errorMessage}</p>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-neon-green text-bg-dark font-semibold text-xs hover:bg-neon-emerald transition-all shadow-glow-green"
+          >
+            <Smartphone size={16} />
+            Tomar foto con cámara del celular
+          </button>
         </div>
       )}
 
@@ -122,7 +188,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       {hasPermission === null && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-text-muted">
           <Camera size={36} className="text-neon-green animate-pulse" />
-          <p className="text-xs">Iniciando sensor biométrico...</p>
+          <p className="text-xs">Iniciando sensor de cámara...</p>
         </div>
       )}
     </div>
