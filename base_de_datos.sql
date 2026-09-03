@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS public.empleados (
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
-COMMENT ON TABLE public.empleados IS 'Información general de los empleados y descriptores faciales biométricos';
+COMMENT ON TABLE public.empleados IS 'Información general de los empleados y descriptores faciales biométricos encriptados';
+COMMENT ON COLUMN public.empleados.datos_biometricos IS 'Descriptor facial de 128 dimensiones encriptado mediante AES-256-GCM (Formato: iv:authTag:encryptedHex)';
 
 -- c) Tabla: asistencias
 CREATE TABLE IF NOT EXISTS public.asistencias (

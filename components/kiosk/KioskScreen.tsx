@@ -7,6 +7,7 @@ import { OnboardingModal } from './OnboardingModal';
 import { Empleado, Asistencia, TipoMarcacion } from '@/types/database';
 import { EmpleadosService, AsistenciasService } from '@/lib/supabaseClient';
 import { BiometricEngine } from '@/lib/biometrics';
+import { decryptBiometrics } from '@/lib/cryptoBiometrics';
 import { sounds } from '@/lib/sound';
 import { 
   CheckCircle, 
@@ -86,16 +87,71 @@ export const KioskScreen: React.FC = () => {
     }, delayMs);
   };
 
-  // Procesar marcación de asistencia
+  // Procesar marcación de asistencia con verificación biométrica encriptada vía API
   const handleFichar = async () => {
     const cleanDoc = documento.trim();
     if (!cleanDoc) return;
 
     setVisualState('scanning');
-    setStatusMessage('Buscando empleado y analizando biometría...');
+    setStatusMessage('Buscando empleado y desencriptando perfil biométrico...');
 
     try {
-      const empleado = await EmpleadosService.getByDocumento(cleanDoc);
+      let liveDescriptor: number[] | null = null;
+      if (videoElement) {
+        liveDescriptor = BiometricEngine.extractDescriptorFromVideo(videoElement);
+      }
+
+      // Intentar verificación biométrica mediante API segura
+      let verifyResult: {
+        success: boolean;
+        isMatch: boolean;
+        reason?: string;
+        matchScore?: number;
+        message?: string;
+        empleado?: Empleado;
+      } | null = null;
+
+      try {
+        const apiRes = await fetch('/api/biometrics/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ documento: cleanDoc, liveDescriptor }),
+        });
+
+        if (apiRes.status === 404) {
+          const data = await apiRes.json();
+          sounds.playError();
+          setVisualState('error');
+          setFeedbackData({
+            title: 'Empleado No Encontrado',
+            description: data.message || `No se encontró ningún registro para el DNI: ${cleanDoc}`,
+          });
+          scheduleReset(3500);
+          return;
+        }
+
+        if (apiRes.status === 403) {
+          const data = await apiRes.json();
+          sounds.playError();
+          setVisualState('error');
+          setFeedbackData({
+            title: 'Acceso Denegado (Inactivo)',
+            description: data.message || 'Tu cuenta está inactiva en el sistema.',
+            empleado: data.empleado,
+          });
+          scheduleReset(3500);
+          return;
+        }
+
+        if (apiRes.ok) {
+          verifyResult = await apiRes.json();
+        }
+      } catch {
+        // Fallback local si la llamada de red falla
+      }
+
+      // Obtener datos del empleado (vía API o servicio)
+      const empleado = verifyResult?.empleado || (await EmpleadosService.getByDocumento(cleanDoc));
 
       if (!empleado) {
         sounds.playError();
@@ -121,30 +177,35 @@ export const KioskScreen: React.FC = () => {
       }
 
       // Si está pendiente de biometría -> Onboarding
-      if (empleado.estado === 'Pendiente_Biometria' || !empleado.datos_biometricos) {
+      if (
+        empleado.estado === 'Pendiente_Biometria' ||
+        !empleado.datos_biometricos ||
+        verifyResult?.reason === 'pending_biometrics'
+      ) {
         setVisualState('onboarding');
         setEnrollingEmpleado(empleado);
         return;
       }
 
-      // Verificación biométrica
       let isBiometricMatch = false;
       let scoreVal = 0;
 
-      if (videoElement) {
-        const liveDescriptor = BiometricEngine.extractDescriptorFromVideo(videoElement);
+      if (verifyResult) {
+        isBiometricMatch = verifyResult.isMatch;
+        scoreVal = verifyResult.matchScore || 0;
+      } else {
+        // Fallback local desencriptando datos biométricos
         if (liveDescriptor && empleado.datos_biometricos) {
-          try {
-            const savedDescriptor: number[] = JSON.parse(empleado.datos_biometricos);
+          const savedDescriptor = decryptBiometrics(empleado.datos_biometricos);
+          if (savedDescriptor) {
             const bioResult = BiometricEngine.compareDescriptors(liveDescriptor, savedDescriptor);
             isBiometricMatch = bioResult.success;
             scoreVal = bioResult.score;
-            setMatchScore(scoreVal);
-          } catch {
-            isBiometricMatch = false;
           }
         }
       }
+
+      setMatchScore(scoreVal);
 
       // Verificar si ya tiene marcación de hoy
       const asistenciaHoy = await AsistenciasService.getTodayForEmpleado(empleado.id);
@@ -178,7 +239,7 @@ export const KioskScreen: React.FC = () => {
         });
         scheduleReset(4200);
       } else {
-        // Excepción por Falla Biometría (Amarillo)
+        // Excepción por Rostro No Reconocido / Suplantación (Amarillo/Alerta)
         sounds.playWarning();
         let fotoUrl: string | null = null;
         if (videoElement) {
@@ -195,8 +256,8 @@ export const KioskScreen: React.FC = () => {
 
         setVisualState('exception');
         setFeedbackData({
-          title: 'Fichaje en Revisión',
-          description: 'Rostro no reconocido con suficiente precisión. Tomando foto de seguridad para aprobación del Administrador.',
+          title: 'Rostro No Coincide',
+          description: `¡Atención! El rostro detectado NO pertenece al titular de este DNI (${empleado.nombre_completo}). Fichaje enviado a revisión del Administrador.`,
           empleado,
           tipoMarcacion: isExit ? 'SALIDA' : 'ENTRADA',
           horasTrabajadas: savedAsistencia.horas_trabajadas,

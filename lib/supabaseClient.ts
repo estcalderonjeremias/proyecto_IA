@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { Turno, Empleado, Asistencia, EstadoFichaje } from '@/types/database';
 import { BiometricEngine } from '@/lib/biometrics';
+import { encryptBiometrics } from '@/lib/cryptoBiometrics';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -213,9 +214,22 @@ export const EmpleadosService = {
   },
 
   async saveBiometrics(id: string, descriptor: number[]): Promise<void> {
-    const serialized = JSON.stringify(descriptor);
+    try {
+      if (typeof window !== 'undefined') {
+        const res = await fetch('/api/biometrics/enroll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ empleado_id: id, descriptor }),
+        });
+        if (res.ok) return;
+      }
+    } catch {
+      // Ignorar fallback
+    }
+
+    const encrypted = encryptBiometrics(descriptor);
     await this.update(id, {
-      datos_biometricos: serialized,
+      datos_biometricos: encrypted,
       estado: 'Activo'
     });
   },

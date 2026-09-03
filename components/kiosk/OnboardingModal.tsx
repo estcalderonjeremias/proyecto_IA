@@ -59,7 +59,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       const updated: Empleado = {
         ...empleado,
         estado: 'Activo',
-        datos_biometricos: JSON.stringify(descriptor),
+        datos_biometricos: 'AES-256-Encrypted',
       };
 
       setTimeout(() => {
