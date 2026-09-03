@@ -12,7 +12,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const controller = new AbortController();
-    // Timeout para la conexión inicial
     const timeoutId = setTimeout(() => controller.abort(), 4000);
 
     const res = await fetch(targetUrl, {
@@ -38,7 +37,6 @@ export async function GET(request: NextRequest) {
           'Content-Type': contentType || 'multipart/x-mixed-replace; boundary=boundarydonotcross',
           'Access-Control-Allow-Origin': '*',
           'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-          'Connection': 'keep-alive',
         },
       });
     }

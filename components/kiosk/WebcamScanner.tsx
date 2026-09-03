@@ -24,6 +24,11 @@ interface WebcamScannerProps {
 
 type CameraSourceType = 'local' | 'ip';
 
+interface CanvasWithStream extends HTMLCanvasElement {
+  captureStream(fps?: number): MediaStream;
+  mozCaptureStream?(fps?: number): MediaStream;
+}
+
 export const WebcamScanner: React.FC<WebcamScannerProps> = ({
   onVideoReady,
   isScanning = true,
@@ -50,8 +55,9 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
 
   // IP Webcam / DroidCam del Celular
   const [ipUrl, setIpUrl] = useState<string>('http://172.20.10.1:4747');
+  const [activeIpStreamUrl, setActiveIpStreamUrl] = useState<string>('');
   const [isConnectingIp, setIsConnectingIp] = useState<boolean>(false);
-  const [, setIpConnected] = useState<boolean>(false);
+  const [ipConnected, setIpConnected] = useState<boolean>(false);
 
   // Cargar preferencias de LocalStorage
   useEffect(() => {
@@ -88,6 +94,8 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setActiveIpStreamUrl('');
+    setIpConnected(false);
   }, []);
 
   // Iniciar Cámara Local (PC / USB / DroidCam Virtual)
@@ -172,10 +180,19 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     let workingUrl = '';
     for (const testUrl of candidateUrls) {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
         const testProxyUrl = `/api/camera-proxy?url=${encodeURIComponent(testUrl)}`;
-        const testRes = await fetch(testProxyUrl, { method: 'GET' });
+        const testRes = await fetch(testProxyUrl, { method: 'GET', signal: controller.signal });
+        clearTimeout(timeoutId);
+
         if (testRes.ok) {
           workingUrl = testUrl;
+          try {
+            await testRes.body?.cancel();
+          } catch {
+            // Ignorar
+          }
           break;
         }
       } catch {
@@ -187,7 +204,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       setIsConnectingIp(false);
       setHasPermission(false);
       setErrorMessage(
-        `No se pudo conectar a ${clean}. Asegúrate de que el iPhone tenga "Compartir Internet" activado y que DroidCam esté abierta.`
+        `No se pudo conectar a ${clean}. Asegúrate de que tu iPhone tenga "Compartir Internet" activado y que DroidCam esté abierta.`
       );
       return;
     }
@@ -199,7 +216,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       hiddenCanvasRef.current.height = 480;
     }
     const canvas = hiddenCanvasRef.current;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const ctx = canvas.getContext('2d');
 
     if (!ctx) {
       setIsConnectingIp(false);
@@ -214,6 +231,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     streamImgRef.current = img;
 
     const streamProxyUrl = `/api/camera-proxy?url=${encodeURIComponent(workingUrl)}`;
+    setActiveIpStreamUrl(streamProxyUrl);
 
     let hasReceivedFirstFrame = false;
 
@@ -226,20 +244,28 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       setIpConnected(true);
       setHasPermission(true);
 
-      // Crear MediaStream desde el canvas
+      // Crear MediaStream desde el canvas para el motor biométrico
       try {
-        const canvasStream = canvas.captureStream(30);
-        activeStreamRef.current = canvasStream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = canvasStream;
-          videoRef.current.play().catch(() => {});
-          onVideoReady?.(videoRef.current);
+        const canvasWithStream = canvas as unknown as CanvasWithStream;
+        const canvasStream = canvasWithStream.captureStream
+          ? canvasWithStream.captureStream(30)
+          : canvasWithStream.mozCaptureStream
+          ? canvasWithStream.mozCaptureStream(30)
+          : null;
+
+        if (canvasStream) {
+          activeStreamRef.current = canvasStream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = canvasStream;
+            videoRef.current.play().catch(() => {});
+            onVideoReady?.(videoRef.current);
+          }
         }
       } catch (err) {
         console.warn('captureStream error:', err);
       }
 
-      // Loop de renderizado en tiempo real a 30 FPS
+      // Loop de renderizado en tiempo real a 30 FPS sobre el canvas
       const render = () => {
         if (!isRunningRef.current) return;
 
@@ -329,7 +355,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         <FlipHorizontal size={18} />
       </button>
 
-      {/* Video Element HTML5 */}
+      {/* Video Element HTML5 (Cámara Local y Biometría) */}
       <video
         ref={videoRef}
         autoPlay
@@ -337,8 +363,19 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         muted
         className={`w-full h-full object-cover transition-transform duration-300 ${
           isMirrored ? '-scale-x-100' : 'scale-x-100'
-        } ${hasPermission ? 'block' : 'hidden'}`}
+        } ${hasPermission && (sourceType === 'local' || !activeIpStreamUrl) ? 'block' : 'hidden'}`}
       />
+
+      {/* Stream Imagen MJPEG Nativo Directo para Modo Celular IP (Fluidez 100% Nativa) */}
+      {sourceType === 'ip' && activeIpStreamUrl && hasPermission && (
+        <img
+          src={activeIpStreamUrl}
+          alt="Transmisión DroidCam"
+          className={`w-full h-full object-cover transition-transform duration-300 ${
+            isMirrored ? '-scale-x-100' : 'scale-x-100'
+          }`}
+        />
+      )}
 
       {/* Marco Biométrico Activo con Neón Verde */}
       {hasPermission && (
@@ -370,7 +407,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
           />
           <span className="truncate max-w-[200px]">
             {hasPermission 
-              ? `${statusText} (${sourceType === 'ip' ? 'DroidCam / Celular' : 'Cámara PC'})` 
+              ? `${statusText} (${sourceType === 'ip' ? (ipConnected ? 'DroidCam iPhone' : 'Conectando...') : 'Cámara PC'})` 
               : 'Sensor Óptico Inactivo'}
           </span>
         </div>
