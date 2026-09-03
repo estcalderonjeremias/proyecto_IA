@@ -1,8 +1,15 @@
 import { BiometricResult } from '@/types/database';
 
 export class BiometricEngine {
-  static extractDescriptorFromVideo(videoElement: HTMLVideoElement): number[] | null {
-    if (!videoElement || videoElement.videoWidth === 0 || videoElement.videoHeight === 0) {
+  static extractDescriptorFromVideo(
+    source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement
+  ): number[] | null {
+    if (!source) return null;
+
+    const sourceWidth = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+
+    if (!sourceWidth || !sourceHeight || sourceWidth === 0 || sourceHeight === 0) {
       return null;
     }
 
@@ -14,12 +21,12 @@ export class BiometricEngine {
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    const minDim = Math.min(videoElement.videoWidth, videoElement.videoHeight);
-    const startX = (videoElement.videoWidth - minDim) / 2;
-    const startY = (videoElement.videoHeight - minDim) / 2;
+    const minDim = Math.min(sourceWidth, sourceHeight);
+    const startX = (sourceWidth - minDim) / 2;
+    const startY = (sourceHeight - minDim) / 2;
 
     ctx.drawImage(
-      videoElement,
+      source,
       startX, startY, minDim, minDim,
       0, 0, width, height
     );
@@ -93,13 +100,17 @@ export class BiometricEngine {
     };
   }
 
-  static captureSnapshot(videoElement: HTMLVideoElement): string {
+  static captureSnapshot(source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement): string {
+    if (!source) return '';
+    const sourceWidth = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+    const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+
     const canvas = document.createElement('canvas');
-    canvas.width = videoElement.videoWidth || 640;
-    canvas.height = videoElement.videoHeight || 480;
+    canvas.width = sourceWidth || 640;
+    canvas.height = sourceHeight || 480;
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
       return canvas.toDataURL('image/jpeg', 0.85);
     }
     return '';

@@ -11,7 +11,6 @@ import {
   FlipHorizontal, 
   Wifi, 
   Check, 
-  AlertCircle,
   RefreshCw,
   X
 } from 'lucide-react';
@@ -34,8 +33,9 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
-  const ipLoopRef = useRef<boolean>(false);
-  const timerIdRef = useRef<NodeJS.Timeout | null>(null);
+  const streamImgRef = useRef<HTMLImageElement | null>(null);
+  const animFrameIdRef = useRef<number | null>(null);
+  const isRunningRef = useRef<boolean>(false);
 
   // Estados de control
   const [sourceType, setSourceType] = useState<CameraSourceType>('local');
@@ -48,10 +48,10 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
 
-  // IP Webcam del Celular
-  const [ipUrl, setIpUrl] = useState<string>('http://192.168.43.1:8080');
+  // IP Webcam / DroidCam del Celular
+  const [ipUrl, setIpUrl] = useState<string>('http://172.20.10.1:4747');
   const [isConnectingIp, setIsConnectingIp] = useState<boolean>(false);
-  const [ipConnected, setIpConnected] = useState<boolean>(false);
+  const [, setIpConnected] = useState<boolean>(false);
 
   // Cargar preferencias de LocalStorage
   useEffect(() => {
@@ -68,12 +68,18 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     }
   }, []);
 
-  // Detener flujos activos
+  // Detener flujos activos de video y streams
   const stopCurrentStreams = useCallback(() => {
-    ipLoopRef.current = false;
-    if (timerIdRef.current) {
-      clearTimeout(timerIdRef.current);
-      timerIdRef.current = null;
+    isRunningRef.current = false;
+    if (animFrameIdRef.current) {
+      cancelAnimationFrame(animFrameIdRef.current);
+      animFrameIdRef.current = null;
+    }
+    if (streamImgRef.current) {
+      streamImgRef.current.onload = null;
+      streamImgRef.current.onerror = null;
+      streamImgRef.current.src = '';
+      streamImgRef.current = null;
     }
     if (activeStreamRef.current) {
       activeStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -101,7 +107,6 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       activeStreamRef.current = stream;
 
-      // Obtener lista de cámaras disponibles
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevs = devices.filter((d) => d.kind === 'videoinput');
@@ -121,120 +126,151 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       }
       setHasPermission(true);
     } catch (err) {
-      console.warn('Error accediendo a la cámara web:', err);
+      console.warn('Error accediendo a la cámara local:', err);
       setHasPermission(false);
       setErrorMessage('No se pudo acceder a la cámara. Permite el permiso en el navegador.');
     }
   }, [onVideoReady, stopCurrentStreams]);
 
-  // Iniciar Cámara IP (Celular con IP Webcam vía Hotspot)
-  const startIpCamera = useCallback(async (targetUrl: string) => {
+  // Iniciar Cámara por IP (DroidCam / iPhone / Android sin instalar nada en la PC)
+  const startIpCamera = useCallback(async (rawUrl: string) => {
     stopCurrentStreams();
     setIsConnectingIp(true);
     setHasPermission(null);
     setErrorMessage('');
 
-    const cleanBaseUrl = targetUrl.trim().replace(/\/+$/, '');
-    
-    // Auto-detectar endpoint según app (DroidCam, IP Camera Lite, IP Webcam)
+    // Sanitizar URL
+    let clean = rawUrl.trim();
+    if (!clean) clean = 'http://172.20.10.1:4747';
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = `http://${clean}`;
+    }
+    clean = clean.replace(/\/+$/, '');
+
+    // Determinar candidatos según el puerto o URL
     let candidateUrls: string[] = [];
-    if (cleanBaseUrl.endsWith('.jpg') || cleanBaseUrl.endsWith('.jpeg') || cleanBaseUrl.includes('/video') || cleanBaseUrl.includes('/cam/')) {
-      candidateUrls = [cleanBaseUrl];
-    } else if (cleanBaseUrl.includes(':4747')) {
-      // DroidCam (iPhone & Android)
+    if (clean.endsWith('/video') || clean.endsWith('.jpg') || clean.endsWith('/live')) {
+      candidateUrls = [clean];
+    } else if (clean.includes(':4747')) {
+      // DroidCam (iPhone y Android)
       candidateUrls = [
-        `${cleanBaseUrl}/cam/1/frame.jpg`,
-        `${cleanBaseUrl}/cam/0/frame.jpg`,
-        `${cleanBaseUrl}/shot.jpg`
+        `${clean}/video`,
+        `${clean}/video?640x480`,
+        `${clean}/mjpegfeed?640x480`,
       ];
-    } else if (cleanBaseUrl.includes(':8081')) {
+    } else if (clean.includes(':8081')) {
       // IP Camera Lite (iOS)
-      candidateUrls = [
-        `${cleanBaseUrl}/snapshot.jpg`,
-        `${cleanBaseUrl}/live`
-      ];
+      candidateUrls = [`${clean}/live`, `${clean}/snapshot.jpg`];
+    } else if (clean.includes(':8080')) {
+      // IP Webcam (Android)
+      candidateUrls = [`${clean}/video`, `${clean}/shot.jpg`];
     } else {
-      // Genericos
-      candidateUrls = [
-        `${cleanBaseUrl}/shot.jpg`,
-        `${cleanBaseUrl}/cam/1/frame.jpg`,
-        `${cleanBaseUrl}/snapshot.jpg`
-      ];
+      candidateUrls = [`${clean}/video`, clean];
     }
 
-    // Probar candidatos hasta encontrar el endpoint activo
-    let workingSnapshotUrl = '';
+    // Probar candidatos hasta conectar con el flujo
+    let workingUrl = '';
     for (const testUrl of candidateUrls) {
       try {
-        const proxyUrl = `/api/camera-proxy?url=${encodeURIComponent(testUrl)}&t=${Date.now()}`;
-        const check = await fetch(proxyUrl);
-        if (check.ok) {
-          workingSnapshotUrl = testUrl;
+        const testProxyUrl = `/api/camera-proxy?url=${encodeURIComponent(testUrl)}`;
+        const testRes = await fetch(testProxyUrl, { method: 'GET' });
+        if (testRes.ok) {
+          workingUrl = testUrl;
           break;
         }
       } catch {
-        // Continuar probando
+        // Seguir probando
       }
     }
 
-    if (!workingSnapshotUrl) {
+    if (!workingUrl) {
       setIsConnectingIp(false);
       setHasPermission(false);
       setErrorMessage(
-        `No se pudo conectar a ${cleanBaseUrl}. Verifica que el Hotspot de tu iPhone esté conectado y que la app esté transmitiendo.`
+        `No se pudo conectar a ${clean}. Asegúrate de que el iPhone tenga "Compartir Internet" activado y que DroidCam esté abierta.`
       );
       return;
     }
 
-    const snapshotUrl = workingSnapshotUrl;
-    ipLoopRef.current = true;
-    setIsConnectingIp(false);
-    setIpConnected(true);
-    setHasPermission(true);
+    // Inicializar Canvas oculto
+    if (!hiddenCanvasRef.current) {
+      hiddenCanvasRef.current = document.createElement('canvas');
+      hiddenCanvasRef.current.width = 640;
+      hiddenCanvasRef.current.height = 480;
+    }
+    const canvas = hiddenCanvasRef.current;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-    // Convertir canvas a MediaStream y conectarlo a HTMLVideoElement
-    try {
-      const canvasStream = canvas.captureStream(25);
-      activeStreamRef.current = canvasStream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = canvasStream;
-        videoRef.current.play().catch(() => {});
-        onVideoReady?.(videoRef.current);
-      }
-    } catch (streamErr) {
-      console.warn('Error en captureStream:', streamErr);
+    if (!ctx) {
+      setIsConnectingIp(false);
+      setHasPermission(false);
+      setErrorMessage('Error al inicializar el procesador de video.');
+      return;
     }
 
-    // Loop continuo para actualizar los fotogramas del celular
-    const updateFrame = () => {
-      if (!ipLoopRef.current) return;
+    // Crear elemento Image para recibir el stream MJPEG o fotos
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    streamImgRef.current = img;
 
-      const img = new Image();
-      const fetchUrl = `/api/camera-proxy?url=${encodeURIComponent(snapshotUrl)}&t=${Date.now()}`;
+    const streamProxyUrl = `/api/camera-proxy?url=${encodeURIComponent(workingUrl)}`;
 
-      img.onload = () => {
-        if (!ipLoopRef.current) return;
-        if (canvas.width !== img.width || canvas.height !== img.height) {
-          canvas.width = img.width || 640;
-          canvas.height = img.height || 480;
+    let hasReceivedFirstFrame = false;
+
+    img.onload = () => {
+      if (hasReceivedFirstFrame) return;
+      hasReceivedFirstFrame = true;
+
+      isRunningRef.current = true;
+      setIsConnectingIp(false);
+      setIpConnected(true);
+      setHasPermission(true);
+
+      // Crear MediaStream desde el canvas
+      try {
+        const canvasStream = canvas.captureStream(30);
+        activeStreamRef.current = canvasStream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = canvasStream;
+          videoRef.current.play().catch(() => {});
+          onVideoReady?.(videoRef.current);
         }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        timerIdRef.current = setTimeout(updateFrame, 50); // ~20 FPS fluido
+      } catch (err) {
+        console.warn('captureStream error:', err);
+      }
+
+      // Loop de renderizado en tiempo real a 30 FPS
+      const render = () => {
+        if (!isRunningRef.current) return;
+
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+          if (canvas.width !== img.naturalWidth) {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+          }
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        }
+
+        animFrameIdRef.current = requestAnimationFrame(render);
       };
 
-      img.onerror = () => {
-        if (!ipLoopRef.current) return;
-        // Reintentar si se pierde un frame
-        timerIdRef.current = setTimeout(updateFrame, 200);
-      };
-
-      img.src = fetchUrl;
+      render();
     };
 
-    updateFrame();
+    img.onerror = () => {
+      if (!hasReceivedFirstFrame) {
+        setIsConnectingIp(false);
+        setHasPermission(false);
+        setErrorMessage(
+          `Error en la transmisión de ${workingUrl}. Revisa la conexión con tu iPhone.`
+        );
+      }
+    };
+
+    img.src = streamProxyUrl;
   }, [onVideoReady, stopCurrentStreams]);
 
-  // Manejar cambio de origen
+  // Manejo de cambio de modo o dispositivo
   useEffect(() => {
     if (sourceType === 'local') {
       startLocalCamera(selectedDeviceId || undefined);
@@ -250,7 +286,6 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
   const handleSelectMode = (mode: CameraSourceType) => {
     setSourceType(mode);
     localStorage.setItem('bioaccess_cam_mode', mode);
-    // Para IP webcam por defecto conviene no espejar (cámara trasera o frontal de celular)
     if (mode === 'ip' && isMirrored) {
       setIsMirrored(false);
       localStorage.setItem('bioaccess_cam_mirror', 'false');
@@ -275,7 +310,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         type="button"
         onClick={() => setShowConfig(!showConfig)}
         className="absolute top-3.5 right-3.5 z-20 p-2 rounded-xl bg-[#0B0F17]/80 hover:bg-[#0B0F17] text-text-muted hover:text-neon-green border border-white/10 hover:border-neon-green/40 backdrop-blur-md transition-all shadow-lg"
-        title="Configurar Cámara / Celular"
+        title="Configurar Cámara / DroidCam"
       >
         <Settings2 size={18} />
       </button>
@@ -335,7 +370,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
           />
           <span className="truncate max-w-[200px]">
             {hasPermission 
-              ? `${statusText} (${sourceType === 'ip' ? 'Celular IP' : 'Cámara PC'})` 
+              ? `${statusText} (${sourceType === 'ip' ? 'DroidCam / Celular' : 'Cámara PC'})` 
               : 'Sensor Óptico Inactivo'}
           </span>
         </div>
@@ -391,7 +426,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                 }`}
               >
                 <Smartphone size={14} />
-                Celular (Hotspot IP)
+                DroidCam (iPhone)
               </button>
             </div>
 
@@ -417,23 +452,23 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                   ))}
                 </select>
                 <p className="text-[11px] text-text-dim">
-                  Si usas DroidCam o Iriun con driver de PC, aparecerá en esta lista como webcam física.
+                  Si tu PC tiene cámara integrada o USB, la detectará aquí.
                 </p>
               </div>
             )}
 
-            {/* Configuración Modo IP (Celular sin cables ni drivers) */}
+            {/* Configuración Modo IP (DroidCam iPhone Hotspot) */}
             {sourceType === 'ip' && (
               <div className="space-y-3">
                 <label className="text-xs text-text-dim block">
-                  Dirección URL que muestra la app en el celular:
+                  Dirección Browser IP de DroidCam:
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={ipUrl}
                     onChange={(e) => setIpUrl(e.target.value)}
-                    placeholder="http://172.20.10.1:4747 o http://192.168.43.1:8080"
+                    placeholder="http://172.20.10.1:4747"
                     className="flex-1 py-2 px-3 rounded-xl bg-background border border-white/15 text-white text-xs font-mono focus:border-neon-green focus:outline-none"
                   />
                   <button
@@ -452,13 +487,11 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                 </div>
                 <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-[11px] text-text-muted space-y-1">
                   <div className="font-semibold text-text-main flex items-center gap-1.5">
-                    <Check size={12} className="text-neon-green" /> Si tienes iPhone (App Store):
+                    <Check size={12} className="text-neon-green" /> Conexión con tu iPhone:
                   </div>
-                  <div>• <strong>DroidCam Webcam</strong>: Abre la app y copia el <em>Browser IP</em> (ej: <code>http://172.20.10.1:4747</code>).</div>
-                  <div>• <strong>IP Camera Lite</strong>: Toca iniciar y copia la URL (ej: <code>http://172.20.10.1:8081</code>).</div>
-                  <div className="pt-1 text-[10px] text-text-dim">
-                    * Recuerda activar <strong>Compartir Internet (Hotspot)</strong> en tu iPhone y conectar la PC.
-                  </div>
+                  <div>1. Activa <strong>Compartir Internet</strong> en tu iPhone y conecta la PC.</div>
+                  <div>2. Abre <strong>DroidCam</strong> en tu iPhone.</div>
+                  <div>3. Copia el <em>Browser IP</em> (ej: <code>http://172.20.10.1:4747</code>) y pulsa Conectar.</div>
                 </div>
               </div>
             )}
@@ -494,7 +527,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
               onClick={() => setShowConfig(true)}
               className="px-4 py-2 rounded-xl bg-neon-green text-black text-xs font-bold flex items-center gap-1.5"
             >
-              <Settings2 size={13} /> Cambiar Modo
+              <Settings2 size={13} /> Configurar
             </button>
           </div>
         </div>
@@ -506,7 +539,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
           {isConnectingIp ? (
             <>
               <Wifi size={36} className="text-neon-green animate-pulse" />
-              <p className="text-xs">Conectando con cámara IP del celular...</p>
+              <p className="text-xs">Conectando con DroidCam en el iPhone...</p>
             </>
           ) : (
             <>
