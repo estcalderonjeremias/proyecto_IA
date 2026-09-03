@@ -1,16 +1,16 @@
 'use client';
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { 
-  Camera, 
-  CameraOff, 
-  Sparkles, 
-  Settings2, 
-  Smartphone, 
-  Laptop, 
-  FlipHorizontal, 
-  Wifi, 
-  Check, 
+import {
+  Camera,
+  CameraOff,
+  Sparkles,
+  Settings2,
+  Smartphone,
+  Laptop,
+  FlipHorizontal,
+  Wifi,
+  Check,
   RefreshCw,
   X
 } from 'lucide-react';
@@ -127,7 +127,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
           if (videoRef.current) {
-            videoRef.current.play().catch(() => {});
+            videoRef.current.play().catch(() => { });
             onVideoReady?.(videoRef.current);
           }
         };
@@ -250,14 +250,14 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         const canvasStream = canvasWithStream.captureStream
           ? canvasWithStream.captureStream(30)
           : canvasWithStream.mozCaptureStream
-          ? canvasWithStream.mozCaptureStream(30)
-          : null;
+            ? canvasWithStream.mozCaptureStream(30)
+            : null;
 
         if (canvasStream) {
           activeStreamRef.current = canvasStream;
           if (videoRef.current) {
             videoRef.current.srcObject = canvasStream;
-            videoRef.current.play().catch(() => {});
+            videoRef.current.play().catch(() => { });
             onVideoReady?.(videoRef.current);
           }
         }
@@ -345,11 +345,10 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       <button
         type="button"
         onClick={toggleMirror}
-        className={`absolute top-3.5 left-3.5 z-20 p-2 rounded-xl border backdrop-blur-md transition-all shadow-lg ${
-          isMirrored 
-            ? 'bg-neon-emerald/20 text-neon-green border-neon-green/40' 
-            : 'bg-[#0B0F17]/80 text-text-muted border-white/10 hover:text-white'
-        }`}
+        className={`absolute top-3.5 left-3.5 z-20 p-2 rounded-xl border backdrop-blur-md transition-all shadow-lg ${isMirrored
+          ? 'bg-neon-emerald/20 text-neon-green border-neon-green/40'
+          : 'bg-[#0B0F17]/80 text-text-muted border-white/10 hover:text-white'
+          }`}
         title={isMirrored ? 'Modo Espejo Activado' : 'Modo Espejo Desactivado'}
       >
         <FlipHorizontal size={18} />
@@ -361,9 +360,8 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         autoPlay
         playsInline
         muted
-        className={`w-full h-full object-cover transition-transform duration-300 ${
-          isMirrored ? '-scale-x-100' : 'scale-x-100'
-        } ${hasPermission && (sourceType === 'local' || !activeIpStreamUrl) ? 'block' : 'hidden'}`}
+        className={`w-full h-full object-cover transition-transform duration-300 ${isMirrored ? '-scale-x-100' : 'scale-x-100'
+          } ${hasPermission && (sourceType === 'local' || !activeIpStreamUrl) ? 'block' : 'hidden'}`}
       />
 
       {/* Stream Imagen MJPEG Nativo Directo para Modo Celular IP (Fluidez 100% Nativa) */}
@@ -371,18 +369,16 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         <img
           src={activeIpStreamUrl}
           alt="Transmisión DroidCam"
-          className={`w-full h-full object-cover transition-transform duration-300 ${
-            isMirrored ? '-scale-x-100' : 'scale-x-100'
-          }`}
+          className={`w-full h-full object-cover transition-transform duration-300 ${isMirrored ? '-scale-x-100' : 'scale-x-100'
+            }`}
         />
       )}
 
       {/* Marco Biométrico Activo con Neón Verde */}
       {hasPermission && (
         <div
-          className={`absolute inset-[12%] border-2 border-dashed border-neon-green/60 rounded-[50%_50%_45%_45%/60%_60%_40%_40%] pointer-events-none ${
-            isScanning ? 'animate-pulse-glow' : ''
-          }`}
+          className={`absolute inset-[12%] border-2 border-dashed border-neon-green/60 rounded-[50%_50%_45%_45%/60%_60%_40%_40%] pointer-events-none ${isScanning ? 'animate-pulse-glow' : ''
+            }`}
           style={{ boxShadow: 'inset 0 0 25px rgba(34, 197, 94, 0.2)' }}
         >
           {isScanning && <div className="laser-line-green" />}
@@ -399,15 +395,14 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       <div className="absolute bottom-0 left-0 right-0 px-5 py-3.5 bg-gradient-to-t from-[#090D16]/95 to-transparent flex items-center justify-between text-text-main z-10">
         <div className="flex items-center gap-2 text-xs font-medium tracking-wide">
           <div
-            className={`w-2.5 h-2.5 rounded-full ${
-              hasPermission
-                ? 'bg-neon-green shadow-[0_0_10px_#22C55E]'
-                : 'bg-status-error shadow-[0_0_10px_#EF4444]'
-            }`}
+            className={`w-2.5 h-2.5 rounded-full ${hasPermission
+              ? 'bg-neon-green shadow-[0_0_10px_#22C55E]'
+              : 'bg-status-error shadow-[0_0_10px_#EF4444]'
+              }`}
           />
           <span className="truncate max-w-[200px]">
-            {hasPermission 
-              ? `${statusText} (${sourceType === 'ip' ? (ipConnected ? 'DroidCam iPhone' : 'Conectando...') : 'Cámara PC'})` 
+            {hasPermission
+              ? `${statusText} (${sourceType === 'ip' ? (ipConnected ? 'DroidCam iPhone' : 'Conectando...') : 'Cámara PC'})`
               : 'Sensor Óptico Inactivo'}
           </span>
         </div>
@@ -443,11 +438,10 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectMode('local')}
-                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
-                  sourceType === 'local'
-                    ? 'bg-neon-green text-black shadow-neon'
-                    : 'text-text-muted hover:text-white'
-                }`}
+                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${sourceType === 'local'
+                  ? 'bg-neon-green text-black shadow-neon'
+                  : 'text-text-muted hover:text-white'
+                  }`}
               >
                 <Laptop size={14} />
                 Cámara PC / USB
@@ -456,11 +450,10 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectMode('ip')}
-                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
-                  sourceType === 'ip'
-                    ? 'bg-neon-green text-black shadow-neon'
-                    : 'text-text-muted hover:text-white'
-                }`}
+                className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${sourceType === 'ip'
+                  ? 'bg-neon-green text-black shadow-neon'
+                  : 'text-text-muted hover:text-white'
+                  }`}
               >
                 <Smartphone size={14} />
                 DroidCam (iPhone)
