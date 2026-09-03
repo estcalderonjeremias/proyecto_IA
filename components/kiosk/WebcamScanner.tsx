@@ -49,11 +49,11 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
   const [isMirrored, setIsMirrored] = useState<boolean>(true);
   const [showConfig, setShowConfig] = useState<boolean>(false);
 
-  // Dispositivos locales
+  // Dispositivos locales (Camo Studio / USB / Integrada)
   const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
 
-  // IP Webcam / DroidCam del Celular
+  // IP Webcam del Celular (Red local / Stream alternativo)
   const [ipUrl, setIpUrl] = useState<string>('http://172.20.10.1:4747');
   const [activeIpStreamUrl, setActiveIpStreamUrl] = useState<string>('');
   const [isConnectingIp, setIsConnectingIp] = useState<boolean>(false);
@@ -98,7 +98,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     setIpConnected(false);
   }, []);
 
-  // Iniciar Cámara Local (PC / USB / DroidCam Virtual)
+  // Iniciar Cámara Local (Camo Studio / Cámara PC / USB)
   const startLocalCamera = useCallback(async (deviceId?: string) => {
     stopCurrentStreams();
     setHasPermission(null);
@@ -119,6 +119,17 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevs = devices.filter((d) => d.kind === 'videoinput');
         setAvailableDevices(videoDevs);
+
+        // Detectar Camo Studio automáticamente si no se ha guardado una selección previa
+        if (!deviceId) {
+          const camoDev = videoDevs.find((d) =>
+            d.label.toLowerCase().includes('camo')
+          );
+          if (camoDev && camoDev.deviceId) {
+            setSelectedDeviceId(camoDev.deviceId);
+            localStorage.setItem('bioaccess_cam_device_id', camoDev.deviceId);
+          }
+        }
       } catch (err) {
         console.warn('No se pudo listar dispositivos:', err);
       }
@@ -136,11 +147,11 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     } catch (err) {
       console.warn('Error accediendo a la cámara local:', err);
       setHasPermission(false);
-      setErrorMessage('No se pudo acceder a la cámara. Permite el permiso en el navegador.');
+      setErrorMessage('No se pudo acceder a la cámara. Permite el acceso a la cámara en tu navegador.');
     }
   }, [onVideoReady, stopCurrentStreams]);
 
-  // Iniciar Cámara por IP (DroidCam / iPhone / Android sin instalar nada en la PC)
+  // Iniciar Cámara por IP (Red Local / Streaming)
   const startIpCamera = useCallback(async (rawUrl: string) => {
     stopCurrentStreams();
     setIsConnectingIp(true);
@@ -160,17 +171,14 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     if (clean.endsWith('/video') || clean.endsWith('.jpg') || clean.endsWith('/live')) {
       candidateUrls = [clean];
     } else if (clean.includes(':4747')) {
-      // DroidCam (iPhone y Android)
       candidateUrls = [
         `${clean}/video`,
         `${clean}/video?640x480`,
         `${clean}/mjpegfeed?640x480`,
       ];
     } else if (clean.includes(':8081')) {
-      // IP Camera Lite (iOS)
       candidateUrls = [`${clean}/live`, `${clean}/snapshot.jpg`];
     } else if (clean.includes(':8080')) {
-      // IP Webcam (Android)
       candidateUrls = [`${clean}/video`, `${clean}/shot.jpg`];
     } else {
       candidateUrls = [`${clean}/video`, clean];
@@ -204,7 +212,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       setIsConnectingIp(false);
       setHasPermission(false);
       setErrorMessage(
-        `No se pudo conectar a ${clean}. Asegúrate de que tu iPhone tenga "Compartir Internet" activado y que DroidCam esté abierta.`
+        `No se pudo conectar a ${clean}. Te recomendamos usar Camo Studio en el teléfono y la PC.`
       );
       return;
     }
@@ -288,7 +296,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         setIsConnectingIp(false);
         setHasPermission(false);
         setErrorMessage(
-          `Error en la transmisión de ${workingUrl}. Revisa la conexión con tu iPhone.`
+          `Error en la transmisión de ${workingUrl}. Revisa la conexión.`
         );
       }
     };
@@ -329,6 +337,21 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
     startIpCamera(ipUrl);
   };
 
+  // Obtener etiqueta amigable del dispositivo activo
+  const getDeviceLabel = () => {
+    if (sourceType === 'ip') {
+      return ipConnected ? 'Cámara IP Celular' : 'Conectando IP...';
+    }
+    const currentDev = availableDevices.find((d) => d.deviceId === selectedDeviceId);
+    if (currentDev?.label) {
+      if (currentDev.label.toLowerCase().includes('camo')) {
+        return 'Camo Camera (Celular)';
+      }
+      return currentDev.label;
+    }
+    return 'Camo Studio / Cámara PC';
+  };
+
   return (
     <div className="relative w-full max-w-[500px] aspect-[4/3] rounded-3xl overflow-hidden bg-[#090D16] border-2 border-neon-emerald/30 shadow-card flex flex-col">
       {/* Botón Flotante de Configuración / Selector de Cámara */}
@@ -336,7 +359,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         type="button"
         onClick={() => setShowConfig(!showConfig)}
         className="absolute top-3.5 right-3.5 z-20 p-2 rounded-xl bg-[#0B0F17]/80 hover:bg-[#0B0F17] text-text-muted hover:text-neon-green border border-white/10 hover:border-neon-green/40 backdrop-blur-md transition-all shadow-lg"
-        title="Configurar Cámara / DroidCam"
+        title="Configurar Cámara / Camo Studio"
       >
         <Settings2 size={18} />
       </button>
@@ -354,7 +377,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
         <FlipHorizontal size={18} />
       </button>
 
-      {/* Video Element HTML5 (Cámara Local y Biometría) */}
+      {/* Video Element HTML5 (Cámara Local / Camo Studio y Biometría) */}
       <video
         ref={videoRef}
         autoPlay
@@ -368,7 +391,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
       {sourceType === 'ip' && activeIpStreamUrl && hasPermission && (
         <img
           src={activeIpStreamUrl}
-          alt="Transmisión DroidCam"
+          alt="Transmisión Cámara IP"
           className={`w-full h-full object-cover transition-transform duration-300 ${isMirrored ? '-scale-x-100' : 'scale-x-100'
             }`}
         />
@@ -400,9 +423,9 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
               : 'bg-status-error shadow-[0_0_10px_#EF4444]'
               }`}
           />
-          <span className="truncate max-w-[200px]">
+          <span className="truncate max-w-[220px]">
             {hasPermission
-              ? `${statusText} (${sourceType === 'ip' ? (ipConnected ? 'DroidCam iPhone' : 'Conectando...') : 'Cámara PC'})`
+              ? `${statusText} (${getDeviceLabel()})`
               : 'Sensor Óptico Inactivo'}
           </span>
         </div>
@@ -422,7 +445,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
               <h4 className="font-bold text-sm text-white flex items-center gap-2">
                 <Settings2 size={16} className="text-neon-green" />
-                Configuración del Sensor Óptico
+                Configuración de Cámara (Camo Studio)
               </h4>
               <button
                 type="button"
@@ -444,7 +467,7 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                   }`}
               >
                 <Laptop size={14} />
-                Cámara PC / USB
+                Camo Studio / Cámara PC
               </button>
 
               <button
@@ -456,11 +479,11 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                   }`}
               >
                 <Smartphone size={14} />
-                DroidCam (iPhone)
+                Cámara IP / URL
               </button>
             </div>
 
-            {/* Configuración Modo Local */}
+            {/* Configuración Modo Local (Camo Studio / USB / PC) */}
             {sourceType === 'local' && (
               <div className="space-y-3">
                 <label className="text-xs text-text-dim block">Seleccionar Dispositivo de Video:</label>
@@ -477,28 +500,34 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                   <option value="">Cámara por Defecto</option>
                   {availableDevices.map((dev, idx) => (
                     <option key={dev.deviceId || idx} value={dev.deviceId}>
-                      {dev.label || `Cámara ${idx + 1}`}
+                      {dev.label ? (dev.label.toLowerCase().includes('camo') ? `📹 ${dev.label} (Camo Studio)` : dev.label) : `Cámara ${idx + 1}`}
                     </option>
                   ))}
                 </select>
-                <p className="text-[11px] text-text-dim">
-                  Si tu PC tiene cámara integrada o USB, la detectará aquí.
-                </p>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-[11px] text-text-muted space-y-1">
+                  <div className="font-semibold text-text-main flex items-center gap-1.5">
+                    <Check size={12} className="text-neon-green" /> Conectar mediante Camo Studio:
+                  </div>
+                  <div>1. Abre <strong>Camo Studio</strong> en tu computadora y en tu teléfono.</div>
+                  <div>2. Conecta el teléfono por USB o Wi-Fi.</div>
+                  <div>3. En la lista superior, selecciona <strong>"Camo Camera"</strong>.</div>
+                </div>
               </div>
             )}
 
-            {/* Configuración Modo IP (DroidCam iPhone Hotspot) */}
+            {/* Configuración Modo IP Alternativo */}
             {sourceType === 'ip' && (
               <div className="space-y-3">
                 <label className="text-xs text-text-dim block">
-                  Dirección Browser IP de DroidCam:
+                  Dirección URL o IP de la Cámara:
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={ipUrl}
                     onChange={(e) => setIpUrl(e.target.value)}
-                    placeholder="http://172.20.10.1:4747"
+                    placeholder="http://192.168.1.50:8080"
                     className="flex-1 py-2 px-3 rounded-xl bg-background border border-white/15 text-white text-xs font-mono focus:border-neon-green focus:outline-none"
                   />
                   <button
@@ -515,14 +544,9 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
                     Conectar
                   </button>
                 </div>
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-[11px] text-text-muted space-y-1">
-                  <div className="font-semibold text-text-main flex items-center gap-1.5">
-                    <Check size={12} className="text-neon-green" /> Conexión con tu iPhone:
-                  </div>
-                  <div>1. Activa <strong>Compartir Internet</strong> en tu iPhone y conecta la PC.</div>
-                  <div>2. Abre <strong>DroidCam</strong> en tu iPhone.</div>
-                  <div>3. Copia el <em>Browser IP</em> (ej: <code>http://172.20.10.1:4747</code>) y pulsa Conectar.</div>
-                </div>
+                <p className="text-[11px] text-text-dim">
+                  Modo de respaldo para cámaras IP / transmisión RTSP / MJPEG. Para la mejor experiencia te recomendamos <strong>Camo Studio</strong>.
+                </p>
               </div>
             )}
           </div>
@@ -569,12 +593,12 @@ export const WebcamScanner: React.FC<WebcamScannerProps> = ({
           {isConnectingIp ? (
             <>
               <Wifi size={36} className="text-neon-green animate-pulse" />
-              <p className="text-xs">Conectando con DroidCam en el iPhone...</p>
+              <p className="text-xs">Conectando con transmisión IP...</p>
             </>
           ) : (
             <>
               <Camera size={36} className="text-neon-green animate-pulse" />
-              <p className="text-xs">Iniciando sensor biométrico...</p>
+              <p className="text-xs">Iniciando sensor biométrico (Camo Studio)...</p>
             </>
           )}
         </div>
