@@ -65,7 +65,7 @@ const INITIAL_EMPLEADOS: Empleado[] = [
     nombre_completo: 'María Valentina Gómez',
     turno_id: '11111111-1111-1111-1111-111111111111',
     estado: 'Activo',
-    datos_biometricos: JSON.stringify(new Array(128).fill(0).map((_, i) => Math.sin(i / 10))),
+    datos_biometricos: encryptBiometrics(new Array(128).fill(0).map((_, i) => Math.sin(i / 10))),
     created_at: new Date().toISOString()
   },
   {

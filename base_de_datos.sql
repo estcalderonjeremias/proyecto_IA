@@ -209,3 +209,30 @@ CREATE POLICY "Permitir eliminacion de fotos a administradores"
 ON storage.objects FOR DELETE
 TO authenticated
 USING (bucket_id = 'fotos_excepciones' AND public.is_admin());
+
+-- ------------------------------------------------------------------------------
+-- 9. FUNCIONES PGCRYPTO PARA ENCRIPTACIÓN BIOMÉTRICA EN BASE DE DATOS
+-- ------------------------------------------------------------------------------
+
+-- Función para encriptar datos biométricos en PostgreSQL
+CREATE OR REPLACE FUNCTION public.encrypt_biometrics_pg(raw_data TEXT, secret_key TEXT)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN encode(pgp_sym_encrypt(raw_data, secret_key), 'hex');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Función para desencriptar datos biométricos en PostgreSQL
+CREATE OR REPLACE FUNCTION public.decrypt_biometrics_pg(encrypted_hex TEXT, secret_key TEXT)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN pgp_sym_decrypt(decode(encrypted_hex, 'hex'), secret_key);
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+COMMENT ON FUNCTION public.encrypt_biometrics_pg IS 'Encripta descriptores biométricos mediante PGP/AES simétrico en PostgreSQL';
+COMMENT ON FUNCTION public.decrypt_biometrics_pg IS 'Desencripta descriptores biométricos mediante PGP/AES simétrico en PostgreSQL';
+
