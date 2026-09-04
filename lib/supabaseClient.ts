@@ -214,22 +214,24 @@ export const EmpleadosService = {
   },
 
   async saveBiometrics(id: string, descriptor: number[]): Promise<void> {
-    try {
-      if (typeof window !== 'undefined') {
-        const res = await fetch('/api/empleados/enrolar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ empleado_id: id, descriptor }),
-        });
-        if (res.ok) return;
+    // Intentar via API server-side (encripta y guarda en Supabase)
+    if (typeof window !== 'undefined') {
+      const res = await fetch('/api/empleados/enrolar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ empleado_id: id, descriptor }),
+      });
+      const data = await res.json().catch(() => ({ success: false, message: 'Error de red.' }));
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || `Error ${res.status} al guardar biometría en Supabase.`);
       }
-    } catch {
-      // Ignorar y continuar con guardado directo
+      return;
     }
 
+    // Fallback directo solo en entorno sin window (SSR)
     await this.update(id, {
       datos_biometricos: descriptor,
-      estado: 'Activo'
+      estado: 'Activo',
     });
   },
 

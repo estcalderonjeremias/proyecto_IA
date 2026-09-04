@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase, isSupabaseConfigured, EmpleadosService } from '@/lib/supabaseClient';
 import { parseDescriptor } from '@/lib/biometrics';
+import { encryptBiometrics } from '@/lib/cryptoBiometrics';
 import { Empleado } from '@/types/database';
 
 export const dynamic = 'force-dynamic';
@@ -74,12 +75,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Encriptar el descriptor con AES-256-GCM antes de persistir
+    let encryptedDescriptor: string;
+    try {
+      encryptedDescriptor = encryptBiometrics(parsedVector);
+    } catch (encErr) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            'Error al encriptar el descriptor biométrico. Verifica la variable BIOMETRIC_SECRET_KEY en el servidor.',
+        },
+        { status: 500 }
+      );
+    }
+
     let savedEmployee: Empleado;
 
     // 2. Si el empleado ya existe, actualizamos sus datos biométricos y cambiamos estado a 'Activo'
     if (existingEmployee) {
       const updates: Partial<Empleado> = {
-        datos_biometricos: parsedVector,
+        datos_biometricos: encryptedDescriptor,
         estado: 'Activo',
       };
       if (nombre_completo && String(nombre_completo).trim()) {
@@ -98,7 +114,7 @@ export async function POST(request: NextRequest) {
           .single();
 
         if (error) {
-          throw new Error(`Error al actualizar empleado en Supabase: ${error.message}`);
+          throw new Error(`Error al guardar biometría en Supabase: ${error.message}`);
         }
         savedEmployee = data as Empleado;
       } else {
@@ -108,7 +124,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: 'Patrón biométrico guardado exitosamente en Supabase. Empleado activado.',
+        message: `Enrolamiento completado con éxito. Bienvenido/a, ${existingEmployee.nombre_completo}. El perfil biométrico fue encriptado y guardado permanentemente en Supabase.`,
         empleado: savedEmployee,
       });
     }
@@ -119,7 +135,7 @@ export async function POST(request: NextRequest) {
       nombre_completo: (nombre_completo && String(nombre_completo).trim()) || `Empleado ${cleanDoc}`,
       turno_id: turno_id || null,
       estado: 'Activo' as const,
-      datos_biometricos: parsedVector,
+      datos_biometricos: encryptedDescriptor,
     };
 
     if (isSupabaseConfigured) {

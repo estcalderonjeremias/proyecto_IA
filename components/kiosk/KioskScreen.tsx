@@ -451,17 +451,25 @@ export const KioskScreen: React.FC = () => {
 
       {/* Modal de Onboarding / Primer Registro de Rostro */}
       {visualState === 'onboarding' && enrollingEmpleado && (
-        <OnboardingModal
+      <OnboardingModal
           empleado={enrollingEmpleado}
           videoElement={videoElement}
           onClose={() => {
             setVisualState('idle');
             setEnrollingEmpleado(null);
+            setDocumento('');
           }}
-          onSuccess={() => {
+          onSuccess={(updatedEmpleado: Empleado) => {
             setEnrollingEmpleado(null);
-            setVisualState('idle');
-            handleFichar();
+            sounds.playSuccess();
+            confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+            setVisualState('success');
+            setFeedbackData({
+              title: '¡Enrolamiento Completado!',
+              description: `Bienvenido/a, ${updatedEmpleado.nombre_completo}. Tu perfil biométrico fue guardado exitosamente en Supabase. Ahora puedes fichar con reconocimiento facial.`,
+              empleado: updatedEmpleado,
+            });
+            scheduleReset(5000);
           }}
         />
       )}
