@@ -33,22 +33,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const rawLive = descriptor || liveDescriptor || scannedVector;
-    const parsedLive = parseDescriptor(rawLive);
-
-    if (!parsedLive || parsedLive.length === 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          isMatch: false,
-          reason: 'missing_descriptor',
-          message: 'No se recibió el vector biométrico escaneado desde la cámara.',
-        },
-        { status: 400 }
-      );
-    }
-
-    // 1. Obtener al empleado de Supabase
+    // 1. Obtener al empleado de Supabase o servicio local
     let empleado: Empleado | null = null;
 
     if (isSupabaseConfigured) {
@@ -91,7 +76,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. Verificar si cuenta con biometría registrada
+    // 3. Verificar si cuenta con biometría registrada (Flujo 1: Enrolamiento Inicial)
     if (empleado.estado === 'Pendiente_Biometria' || !empleado.datos_biometricos) {
       return NextResponse.json(
         {
@@ -104,6 +89,23 @@ export async function POST(request: NextRequest) {
         { status: 422 }
       );
     }
+
+    // 4. Si el empleado es Activo y requiere validación biométrica, verificar descriptor escaneado
+    const rawLive = descriptor || liveDescriptor || scannedVector;
+    const parsedLive = parseDescriptor(rawLive);
+
+    if (!parsedLive || parsedLive.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          isMatch: false,
+          reason: 'missing_descriptor',
+          message: 'No se recibió el vector biométrico escaneado desde la cámara.',
+        },
+        { status: 400 }
+      );
+    }
+
 
     // 4. Decodificar vector guardado en Supabase
     const savedDescriptor = parseDescriptor(empleado.datos_biometricos);

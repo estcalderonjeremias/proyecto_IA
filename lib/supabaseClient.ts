@@ -177,13 +177,26 @@ export const EmpleadosService = {
   async getByDocumento(doc: string): Promise<Empleado | null> {
     const cleanDoc = doc.trim();
     if (isSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('empleados')
-        .select('*, turno:turnos(*)')
-        .eq('documento', cleanDoc)
-        .maybeSingle();
-      if (!error && data) return data as Empleado;
+      try {
+        const { data, error } = await supabase
+          .from('empleados')
+          .select('*, turno:turnos(*)')
+          .eq('documento', cleanDoc)
+          .maybeSingle();
+        if (!error && data) return data as Empleado;
+      } catch (err) {
+        console.warn('[EmpleadosService] Error consultando Supabase:', err);
+      }
     }
+    // Fallback: verificar lista completa de mockStore / localStorage
+    const turnos = mockStore.getTurnos();
+    const localList = mockStore.getEmpleados().map(e => ({
+      ...e,
+      turno: turnos.find(t => t.id === e.turno_id)
+    }));
+    const foundLocal = localList.find(e => e.documento === cleanDoc);
+    if (foundLocal) return foundLocal;
+
     const list = await this.getAll();
     return list.find(e => e.documento === cleanDoc) || null;
   },

@@ -114,7 +114,7 @@ export const KioskScreen: React.FC = () => {
     if (!cleanDoc) return;
 
     setVisualState('scanning');
-    setStatusMessage('Verificando biometría facial en Supabase...');
+    setStatusMessage('Verificando biometría facial...');
 
     try {
       // 1. Obtener descriptor en vivo (extraído de face-api o canvas)
@@ -129,7 +129,8 @@ export const KioskScreen: React.FC = () => {
         snapshotBase64 = BiometricEngine.captureSnapshot(videoElement);
       }
 
-      // 2. Llamada directa al endpoint unificado /api/fichar
+      // 2. Intentar la llamada al endpoint /api/fichar (consulta Supabase en el servidor)
+      let apiHandled = false;
       try {
         const apiRes = await fetch('/api/fichar', {
           method: 'POST',
@@ -143,19 +144,7 @@ export const KioskScreen: React.FC = () => {
 
         const data = await apiRes.json();
 
-        // Empleado no encontrado
-        if (apiRes.status === 404) {
-          sounds.playError();
-          setVisualState('error');
-          setFeedbackData({
-            title: 'Empleado No Encontrado',
-            description: data.message || `No se encontró ningún registro para el DNI: ${cleanDoc}`,
-          });
-          scheduleReset(3500);
-          return;
-        }
-
-        // Empleado inactivo
+        // 403 Inactivo → definitivo, la API ya consultó Supabase
         if (apiRes.status === 403) {
           sounds.playError();
           setVisualState('error');
@@ -165,37 +154,35 @@ export const KioskScreen: React.FC = () => {
             empleado: data.empleado,
           });
           scheduleReset(3500);
+          apiHandled = true;
           return;
         }
 
-        // Pendiente de enrolamiento biométrico
+        // 422 Pendiente de enrolamiento
         if (apiRes.status === 422 || data.reason === 'pending_biometrics') {
           const emp = data.empleado || (await EmpleadosService.getByDocumento(cleanDoc));
           if (emp) {
             setVisualState('onboarding');
             setEnrollingEmpleado(emp);
+            apiHandled = true;
             return;
           }
         }
 
+        // 200 OK: fichaje exitoso o con excepción biométrica
         if (apiRes.ok && data.success) {
           setMatchScore(data.matchScore);
+          apiHandled = true;
 
           if (data.isMatch) {
-            // Marcación Exitosa (Verde)
             sounds.playSuccess();
-            confetti({
-              particleCount: 65,
-              spread: 75,
-              origin: { y: 0.7 },
-            });
-
+            confetti({ particleCount: 65, spread: 75, origin: { y: 0.7 } });
             setVisualState('success');
             setFeedbackData({
               title: data.tipo_marcacion === 'SALIDA' ? '¡Hasta luego!' : '¡Bienvenido/a!',
               description: data.tipo_marcacion === 'SALIDA'
-                ? 'Marcación de SALIDA validada y persistida en Supabase.'
-                : 'Marcación de ENTRADA validada y persistida en Supabase.',
+                ? 'Marcación de SALIDA validada y guardada.'
+                : 'Marcación de ENTRADA validada y guardada.',
               empleado: data.empleado,
               tipoMarcacion: data.tipo_marcacion,
               horasTrabajadas: data.asistencia?.horas_trabajadas,
@@ -203,7 +190,6 @@ export const KioskScreen: React.FC = () => {
             scheduleReset(4200);
             return;
           } else {
-            // Excepción por Rostro No Reconocido (Amarillo/Alerta)
             sounds.playWarning();
             setVisualState('exception');
             setFeedbackData({
@@ -218,11 +204,22 @@ export const KioskScreen: React.FC = () => {
             return;
           }
         }
+
+        // 404 u otro error: NO retornar todavía — intentar fallback local
+        // El empleado puede existir en localStorage si Supabase no lo sincronizó
+        if (apiRes.status !== 404) {
+          console.warn('[Kiosco] /api/fichar respondió', apiRes.status, data?.message);
+        }
+
       } catch (networkErr) {
-        console.warn('Fallo llamada API /api/fichar, intentando fallback:', networkErr);
+        console.warn('[Kiosco] Error de red en /api/fichar, usando servicio local:', networkErr);
       }
 
-      // 3. Fallback local si la llamada de red falló
+      if (apiHandled) return;
+
+      // 3. Fallback local: buscar empleado via EmpleadosService (lee Supabase o localStorage)
+      //    Necesario cuando el empleado fue creado pero Supabase no lo sincronizó aún
+      setStatusMessage('Buscando empleado...');
       const empleado = await EmpleadosService.getByDocumento(cleanDoc);
 
       if (!empleado) {
