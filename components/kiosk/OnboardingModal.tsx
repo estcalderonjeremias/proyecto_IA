@@ -37,7 +37,27 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
     try {
       const snapshot = BiometricEngine.captureSnapshot(videoElement);
-      const descriptor = BiometricEngine.extractDescriptorFromVideo(videoElement);
+      let descriptor: number[] | null = null;
+
+      // 1. Intentar extracción de alta precisión con redes neuronales de @vladmandic/face-api
+      try {
+        const faceapi = await import('@vladmandic/face-api');
+        const detection = await faceapi
+          .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 }))
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+
+        if (detection && detection.descriptor) {
+          descriptor = Array.from(detection.descriptor);
+        }
+      } catch (faceErr) {
+        console.warn('Extracción con red neuronal face-api no disponible, usando extractor de respaldo:', faceErr);
+      }
+
+      // 2. Extractor de respaldo si la red neuronal aún no cargó
+      if (!descriptor) {
+        descriptor = BiometricEngine.extractDescriptorFromVideo(videoElement);
+      }
 
       if (!descriptor) {
         throw new Error('No se detectó un rostro claro. Centra tu cara frente al sensor.');
@@ -46,8 +66,25 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       setPreviewPhoto(snapshot);
       setStep(2);
 
-      // Guardar descriptor en base de datos de Supabase
-      await EmpleadosService.saveBiometrics(empleado.id, descriptor);
+      // Guardar descriptor permanentemente en base de datos de Supabase vía /api/empleados/enrolar
+      const enrollRes = await fetch('/api/empleados/enrolar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          empleado_id: empleado.id,
+          documento: empleado.documento,
+          nombre_completo: empleado.nombre_completo,
+          turno_id: empleado.turno_id,
+          descriptor,
+        }),
+      });
+
+      if (!enrollRes.ok) {
+        const errorData = await enrollRes.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Error al persistir biometría en Supabase');
+      }
+
+      const { empleado: persistedEmpleado } = await enrollRes.json();
 
       sounds.playSuccess();
       confetti({
@@ -56,10 +93,10 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         origin: { y: 0.6 },
       });
 
-      const updated: Empleado = {
+      const updated: Empleado = persistedEmpleado || {
         ...empleado,
         estado: 'Activo',
-        datos_biometricos: 'AES-256-Encrypted',
+        datos_biometricos: descriptor,
       };
 
       setTimeout(() => {

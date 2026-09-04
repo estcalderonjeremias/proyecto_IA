@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { decryptBiometrics } from '@/lib/cryptoBiometrics';
-import { BiometricEngine } from '@/lib/biometrics';
+import { parseDescriptor, BiometricEngine } from '@/lib/biometrics';
 import { EmpleadosService } from '@/lib/supabaseClient';
 
 export const dynamic = 'force-dynamic';
@@ -59,8 +58,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 4. Desencriptar los datos biométricos almacenados con AES-256-GCM
-    const storedDescriptor = decryptBiometrics(empleado.datos_biometricos);
+    // 4. Obtener los datos biométricos almacenados (JSONB o encriptado)
+    const storedDescriptor = parseDescriptor(empleado.datos_biometricos);
 
     if (!storedDescriptor) {
       return NextResponse.json(
@@ -68,7 +67,7 @@ export async function POST(request: NextRequest) {
           success: false,
           isMatch: false,
           reason: 'corrupted_biometrics',
-          message: 'Error al desencriptar el perfil biométrico guardado en la base de datos.',
+          message: 'Error al decodificar el perfil biométrico guardado en la base de datos.',
           empleado,
         },
         { status: 500 }

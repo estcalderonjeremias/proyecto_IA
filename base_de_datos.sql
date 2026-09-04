@@ -40,12 +40,12 @@ CREATE TABLE IF NOT EXISTS public.empleados (
     nombre_completo VARCHAR(100) NOT NULL,
     turno_id UUID REFERENCES public.turnos(id) ON DELETE SET NULL,
     estado VARCHAR(30) CHECK (estado IN ('Activo', 'Inactivo', 'Pendiente_Biometria')) DEFAULT 'Pendiente_Biometria' NOT NULL,
-    datos_biometricos TEXT NULL,
+    datos_biometricos JSONB NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
-COMMENT ON TABLE public.empleados IS 'Información general de los empleados y descriptores faciales biométricos encriptados';
-COMMENT ON COLUMN public.empleados.datos_biometricos IS 'Descriptor facial de 128 dimensiones encriptado mediante AES-256-GCM (Formato: iv:authTag:encryptedHex)';
+COMMENT ON TABLE public.empleados IS 'Información de empleados y descriptores faciales biométricos de 128 flotantes (@vladmandic/face-api)';
+COMMENT ON COLUMN public.empleados.datos_biometricos IS 'Descriptor facial de 128 dimensiones en formato JSONB [float, ...] para reconocimiento facial sin pérdida de precisión';
 
 -- c) Tabla: asistencias
 CREATE TABLE IF NOT EXISTS public.asistencias (
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.administradores (
 COMMENT ON TABLE public.administradores IS 'Usuarios con privilegios de administración vinculados con Supabase Auth';
 
 -- ------------------------------------------------------------------------------
--- 4. ÍNDICES DE RENDIMIENT
+-- 4. ÍNDICES DE RENDIMIENTO
 -- ------------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_empleados_documento ON public.empleados(documento);
 CREATE INDEX IF NOT EXISTS idx_empleados_estado ON public.empleados(estado);
@@ -138,10 +138,15 @@ CREATE POLICY "Permitir consulta de empleados para Kiosco"
 ON public.empleados FOR SELECT
 USING (true);
 
--- Permite actualización limitada de datos biométricos desde el Kiosco (si aplica durante enrolamiento)
+-- Permite inserción de empleados durante enrolamiento desde el Kiosco / API
+CREATE POLICY "Permitir insercion de empleados desde Kiosco"
+ON public.empleados FOR INSERT
+WITH CHECK (true);
+
+-- Permite actualización de datos biométricos y estado desde el Kiosco / API
 CREATE POLICY "Permitir actualizacion de biometria desde Kiosco"
 ON public.empleados FOR UPDATE
-USING (estado = 'Pendiente_Biometria' OR true)
+USING (true)
 WITH CHECK (true);
 
 -- Permite control total a Administradores
@@ -235,4 +240,30 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 COMMENT ON FUNCTION public.encrypt_biometrics_pg IS 'Encripta descriptores biométricos mediante PGP/AES simétrico en PostgreSQL';
 COMMENT ON FUNCTION public.decrypt_biometrics_pg IS 'Desencripta descriptores biométricos mediante PGP/AES simétrico en PostgreSQL';
+
+-- ------------------------------------------------------------------------------
+-- 10. MIGRACIÓN AUTOMÁTICA SI LA TABLA YA EXISTÍA PREVIAMENTE
+-- ------------------------------------------------------------------------------
+-- Asegura que datos_biometricos sea de tipo JSONB para almacenar los 128 números flotantes
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+          AND table_name = 'empleados' 
+          AND column_name = 'datos_biometricos' 
+          AND data_type = 'text'
+    ) THEN
+        ALTER TABLE public.empleados 
+        ALTER COLUMN datos_biometricos TYPE JSONB 
+        USING (
+            CASE 
+                WHEN datos_biometricos IS NULL THEN NULL 
+                WHEN datos_biometricos ~ '^[\[{]' THEN datos_biometricos::jsonb 
+                ELSE NULL 
+            END
+        );
+    END IF;
+END $$;
+
 

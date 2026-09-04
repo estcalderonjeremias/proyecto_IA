@@ -17,7 +17,7 @@ export interface Empleado {
   nombre_completo: string;
   turno_id: string | null;
   estado: EstadoEmpleado;
-  datos_biometricos: string | null;
+  datos_biometricos: number[] | string | null;
   created_at?: string;
   turno?: Turno;
 }
@@ -47,4 +47,6 @@ export interface BiometricResult {
   success: boolean;
   score: number;
   message: string;
+  distance?: number;
+  isMatch?: boolean;
 }

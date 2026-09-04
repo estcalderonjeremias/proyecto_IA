@@ -1,13 +1,27 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { WebcamScanner } from './WebcamScanner';
+import dynamic from 'next/dynamic';
+
+const KioskScanner = dynamic(
+  () => import('@/components/KioskScanner').then((m) => m.KioskScanner),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full aspect-[4/3] max-h-[460px] rounded-3xl glass-card-glow border border-white/10 flex items-center justify-center text-text-muted text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-2.5 h-2.5 rounded-full bg-neon-green animate-pulse" />
+          <span>Iniciando sensor biométrico...</span>
+        </div>
+      </div>
+    ),
+  }
+);
 import { NumpadPad } from './NumpadPad';
 import { OnboardingModal } from './OnboardingModal';
 import { Empleado, Asistencia, TipoMarcacion } from '@/types/database';
 import { EmpleadosService, AsistenciasService } from '@/lib/supabaseClient';
-import { BiometricEngine } from '@/lib/biometrics';
-import { decryptBiometrics } from '@/lib/cryptoBiometrics';
+import { BiometricEngine, parseDescriptor } from '@/lib/biometrics';
 import { sounds } from '@/lib/sound';
 import { 
   CheckCircle, 
@@ -35,6 +49,9 @@ export const KioskScreen: React.FC = () => {
   const [matchScore, setMatchScore] = useState<number | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('Esperando ingreso de DNI...');
   
+  // Ref para guardar el descriptor en tiempo real de face-api
+  const latestLiveDescriptorRef = useRef<number[] | null>(null);
+
   // Feedback Data
   const [feedbackData, setFeedbackData] = useState<{
     title: string;
@@ -65,6 +82,10 @@ export const KioskScreen: React.FC = () => {
     setVideoElement(video);
   }, []);
 
+  const handleDescriptorExtracted = useCallback((descriptor: number[]) => {
+    latestLiveDescriptorRef.current = descriptor;
+  }, []);
+
   // HTML5 Fullscreen API
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -87,39 +108,43 @@ export const KioskScreen: React.FC = () => {
     }, delayMs);
   };
 
-  // Procesar marcación de asistencia con verificación biométrica encriptada vía API
+  // Procesar marcación de asistencia con verificación biométrica vía /api/fichar
   const handleFichar = async () => {
     const cleanDoc = documento.trim();
     if (!cleanDoc) return;
 
     setVisualState('scanning');
-    setStatusMessage('Buscando empleado y desencriptando perfil biométrico...');
+    setStatusMessage('Verificando biometría facial en Supabase...');
 
     try {
-      let liveDescriptor: number[] | null = null;
-      if (videoElement) {
+      // 1. Obtener descriptor en vivo (extraído de face-api o canvas)
+      let liveDescriptor = latestLiveDescriptorRef.current;
+      if (!liveDescriptor && videoElement) {
         liveDescriptor = BiometricEngine.extractDescriptorFromVideo(videoElement);
       }
 
-      // Intentar verificación biométrica mediante API segura
-      let verifyResult: {
-        success: boolean;
-        isMatch: boolean;
-        reason?: string;
-        matchScore?: number;
-        message?: string;
-        empleado?: Empleado;
-      } | null = null;
+      // Snapshot para excepciones
+      let snapshotBase64: string | null = null;
+      if (videoElement) {
+        snapshotBase64 = BiometricEngine.captureSnapshot(videoElement);
+      }
 
+      // 2. Llamada directa al endpoint unificado /api/fichar
       try {
-        const apiRes = await fetch('/api/biometrics/verify', {
+        const apiRes = await fetch('/api/fichar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ documento: cleanDoc, liveDescriptor }),
+          body: JSON.stringify({
+            documento: cleanDoc,
+            descriptor: liveDescriptor,
+            foto_excepcion: snapshotBase64,
+          }),
         });
 
+        const data = await apiRes.json();
+
+        // Empleado no encontrado
         if (apiRes.status === 404) {
-          const data = await apiRes.json();
           sounds.playError();
           setVisualState('error');
           setFeedbackData({
@@ -130,8 +155,8 @@ export const KioskScreen: React.FC = () => {
           return;
         }
 
+        // Empleado inactivo
         if (apiRes.status === 403) {
-          const data = await apiRes.json();
           sounds.playError();
           setVisualState('error');
           setFeedbackData({
@@ -143,15 +168,62 @@ export const KioskScreen: React.FC = () => {
           return;
         }
 
-        if (apiRes.ok) {
-          verifyResult = await apiRes.json();
+        // Pendiente de enrolamiento biométrico
+        if (apiRes.status === 422 || data.reason === 'pending_biometrics') {
+          const emp = data.empleado || (await EmpleadosService.getByDocumento(cleanDoc));
+          if (emp) {
+            setVisualState('onboarding');
+            setEnrollingEmpleado(emp);
+            return;
+          }
         }
-      } catch {
-        // Fallback local si la llamada de red falla
+
+        if (apiRes.ok && data.success) {
+          setMatchScore(data.matchScore);
+
+          if (data.isMatch) {
+            // Marcación Exitosa (Verde)
+            sounds.playSuccess();
+            confetti({
+              particleCount: 65,
+              spread: 75,
+              origin: { y: 0.7 },
+            });
+
+            setVisualState('success');
+            setFeedbackData({
+              title: data.tipo_marcacion === 'SALIDA' ? '¡Hasta luego!' : '¡Bienvenido/a!',
+              description: data.tipo_marcacion === 'SALIDA'
+                ? 'Marcación de SALIDA validada y persistida en Supabase.'
+                : 'Marcación de ENTRADA validada y persistida en Supabase.',
+              empleado: data.empleado,
+              tipoMarcacion: data.tipo_marcacion,
+              horasTrabajadas: data.asistencia?.horas_trabajadas,
+            });
+            scheduleReset(4200);
+            return;
+          } else {
+            // Excepción por Rostro No Reconocido (Amarillo/Alerta)
+            sounds.playWarning();
+            setVisualState('exception');
+            setFeedbackData({
+              title: 'Rostro No Coincide',
+              description: `¡Atención! Discrepancia biométrica con el titular del DNI (${data.empleado?.nombre_completo}). Marcación de ${data.tipo_marcacion} enviada a revisión.`,
+              empleado: data.empleado,
+              tipoMarcacion: data.tipo_marcacion,
+              horasTrabajadas: data.asistencia?.horas_trabajadas,
+              snapshotUrl: snapshotBase64,
+            });
+            scheduleReset(6000);
+            return;
+          }
+        }
+      } catch (networkErr) {
+        console.warn('Fallo llamada API /api/fichar, intentando fallback:', networkErr);
       }
 
-      // Obtener datos del empleado (vía API o servicio)
-      const empleado = verifyResult?.empleado || (await EmpleadosService.getByDocumento(cleanDoc));
+      // 3. Fallback local si la llamada de red falló
+      const empleado = await EmpleadosService.getByDocumento(cleanDoc);
 
       if (!empleado) {
         sounds.playError();
@@ -169,95 +241,67 @@ export const KioskScreen: React.FC = () => {
         setVisualState('error');
         setFeedbackData({
           title: 'Acceso Denegado (Inactivo)',
-          description: 'Tu cuenta está inactiva en el sistema. Contacta con Recursos Humanos.',
+          description: 'Tu cuenta está inactiva en el sistema.',
           empleado,
         });
         scheduleReset(3500);
         return;
       }
 
-      // Si está pendiente de biometría -> Onboarding
-      if (
-        empleado.estado === 'Pendiente_Biometria' ||
-        !empleado.datos_biometricos ||
-        verifyResult?.reason === 'pending_biometrics'
-      ) {
+      if (empleado.estado === 'Pendiente_Biometria' || !empleado.datos_biometricos) {
         setVisualState('onboarding');
         setEnrollingEmpleado(empleado);
         return;
       }
 
-      let isBiometricMatch = false;
+      const savedDesc = parseDescriptor(empleado.datos_biometricos);
+      let isMatch = false;
       let scoreVal = 0;
 
-      if (verifyResult) {
-        isBiometricMatch = verifyResult.isMatch;
-        scoreVal = verifyResult.matchScore || 0;
-      } else {
-        // Fallback local desencriptando datos biométricos
-        if (liveDescriptor && empleado.datos_biometricos) {
-          const savedDescriptor = decryptBiometrics(empleado.datos_biometricos);
-          if (savedDescriptor) {
-            const bioResult = BiometricEngine.compareDescriptors(liveDescriptor, savedDescriptor);
-            isBiometricMatch = bioResult.success;
-            scoreVal = bioResult.score;
-          }
-        }
+      if (liveDescriptor && savedDesc) {
+        const bioResult = BiometricEngine.compareDescriptors(liveDescriptor, savedDesc, 0.6);
+        isMatch = bioResult.isMatch || bioResult.success;
+        scoreVal = bioResult.score;
       }
 
       setMatchScore(scoreVal);
-
-      // Verificar si ya tiene marcación de hoy
       const asistenciaHoy = await AsistenciasService.getTodayForEmpleado(empleado.id);
       const isExit = Boolean(asistenciaHoy && !asistenciaHoy.hora_salida);
 
-      if (isBiometricMatch) {
-        // Marcación Exitosa (Verde)
+      if (isMatch) {
         sounds.playSuccess();
-        confetti({
-          particleCount: 65,
-          spread: 75,
-          origin: { y: 0.7 },
-        });
-
+        confetti({ particleCount: 65, spread: 75, origin: { y: 0.7 } });
         let savedAsistencia: Asistencia;
         if (isExit && asistenciaHoy) {
           savedAsistencia = await AsistenciasService.clockOut(asistenciaHoy.id, empleado.turno || null);
         } else {
           savedAsistencia = await AsistenciasService.clockIn(empleado.id, 'Normal');
         }
-
         setVisualState('success');
         setFeedbackData({
           title: isExit ? '¡Hasta luego!' : '¡Bienvenido/a!',
-          description: isExit
-            ? 'Marcación de SALIDA validada y registrada correctamente.'
-            : 'Marcación de ENTRADA validada y registrada correctamente.',
+          description: isExit ? 'Marcación de SALIDA registrada.' : 'Marcación de ENTRADA registrada.',
           empleado,
           tipoMarcacion: isExit ? 'SALIDA' : 'ENTRADA',
           horasTrabajadas: savedAsistencia.horas_trabajadas,
         });
         scheduleReset(4200);
       } else {
-        // Excepción por Rostro No Reconocido / Suplantación (Amarillo/Alerta)
         sounds.playWarning();
         let fotoUrl: string | null = null;
-        if (videoElement) {
-          const snapshotBase64 = BiometricEngine.captureSnapshot(videoElement);
+        if (snapshotBase64) {
           fotoUrl = await AsistenciasService.uploadExceptionPhoto(snapshotBase64, empleado.id);
         }
-
         let savedAsistencia: Asistencia;
         if (isExit && asistenciaHoy) {
           savedAsistencia = await AsistenciasService.clockOut(asistenciaHoy.id, empleado.turno || null);
         } else {
           savedAsistencia = await AsistenciasService.clockIn(empleado.id, 'Requiere_Aprobacion', fotoUrl);
         }
-
         setVisualState('exception');
         setFeedbackData({
           title: 'Rostro No Coincide',
-          description: `¡Atención! El rostro detectado NO pertenece al titular de este DNI (${empleado.nombre_completo}). Fichaje enviado a revisión del Administrador.`,
+          description: `Discrepancia facial detectada para ${empleado.nombre_completo}.`,
           empleado,
           tipoMarcacion: isExit ? 'SALIDA' : 'ENTRADA',
           horasTrabajadas: savedAsistencia.horas_trabajadas,
@@ -305,10 +349,11 @@ export const KioskScreen: React.FC = () => {
 
       {/* Contenedor Principal: Webcam + Numpad */}
       <div className="glass-card w-full max-w-4xl p-6 sm:p-10 rounded-3xl grid grid-cols-1 lg:grid-cols-2 gap-8 items-center relative overflow-hidden">
-        {/* Lado Izquierdo: Sensor Webcam */}
+        {/* Lado Izquierdo: Sensor Biométrico KioskScanner (@vladmandic/face-api + Camo) */}
         <div className="flex flex-col items-center gap-3">
-          <WebcamScanner
+          <KioskScanner
             onVideoReady={handleVideoReady}
+            onDescriptorExtracted={handleDescriptorExtracted}
             isScanning={visualState === 'scanning' || documento.length > 0}
             statusText={statusMessage}
             matchScore={matchScore}

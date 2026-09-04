@@ -1,4 +1,9 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
-  "/page": "app/page.js"
+  "/page": "app/page.js",
+  "/api/biometrics/verify/route": "app/api/biometrics/verify/route.js",
+  "/api/camera-proxy/route": "app/api/camera-proxy/route.js",
+  "/api/biometrics/enroll/route": "app/api/biometrics/enroll/route.js",
+  "/api/empleados/enrolar/route": "app/api/empleados/enrolar/route.js",
+  "/api/fichar/route": "app/api/fichar/route.js"
 }

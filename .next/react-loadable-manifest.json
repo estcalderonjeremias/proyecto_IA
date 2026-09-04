@@ -1,1 +1,15 @@
-{}
+{
+  "components\\KioskScanner.tsx -> @vladmandic/face-api": {
+    "id": 1254,
+    "files": [
+      "static/chunks/88603698.5886001e9da14683.js",
+      "static/chunks/413.48bdf0550026e6e7.js"
+    ]
+  },
+  "components\\kiosk\\KioskScreen.tsx -> @/components/KioskScanner": {
+    "id": 6404,
+    "files": [
+      "static/chunks/404.5d4aa390b60b909c.js"
+    ]
+  }
+}
