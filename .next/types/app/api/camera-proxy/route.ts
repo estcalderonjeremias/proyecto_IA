@@ -1,4 +1,4 @@
-// File: C:\Users\Pc\Desktop\programacion\proyecto_IA\app\api\camera-proxy\route.ts
+// File: C:\Users\PC-1\Desktop\programacion\proyecto_IA\app\api\camera-proxy\route.ts
 import * as entry from '../../../../../app/api/camera-proxy/route.js'
 import type { NextRequest } from 'next/server.js'
 

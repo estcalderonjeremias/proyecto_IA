@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase, isSupabaseConfigured, EmpleadosService, AsistenciasService } from '@/lib/supabaseClient';
+import { supabase } from '@/lib/supabaseClient';
 import { compareDescriptors, parseDescriptor } from '@/lib/biometrics';
 import { Empleado, Asistencia, TipoMarcacion, EstadoFichaje } from '@/types/database';
 
@@ -33,24 +33,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1. Obtener al empleado de Supabase o servicio local
-    let empleado: Empleado | null = null;
+    // 1. Obtener al empleado de Supabase en la nube
+    const { data: empData, error: empError } = await supabase
+      .from('empleados')
+      .select('*, turno:turnos(*)')
+      .eq('documento', cleanDoc)
+      .maybeSingle();
 
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('empleados')
-        .select('*, turno:turnos(*)')
-        .eq('documento', cleanDoc)
-        .maybeSingle();
-
-      if (!error && data) {
-        empleado = data as Empleado;
-      }
-    } else {
-      empleado = await EmpleadosService.getByDocumento(cleanDoc);
+    if (empError) {
+      console.error('[POST /api/fichar] Error consultando empleado en Supabase:', empError.message);
+      return NextResponse.json(
+        {
+          success: false,
+          isMatch: false,
+          reason: 'database_error',
+          message: `Error al consultar empleado en Supabase: ${empError.message}`,
+        },
+        { status: 500 }
+      );
     }
 
-    if (!empleado) {
+    if (!empData) {
       return NextResponse.json(
         {
           success: false,
@@ -61,6 +64,8 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
+
+    const empleado = empData as Empleado;
 
     // 2. Verificar estado del empleado
     if (empleado.estado === 'Inactivo') {
@@ -76,7 +81,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. Verificar si cuenta con biometría registrada (Flujo 1: Enrolamiento Inicial)
+    // 3. Verificar si cuenta con biometría registrada (Enrolamiento inicial pendiente)
     if (empleado.estado === 'Pendiente_Biometria' || !empleado.datos_biometricos) {
       return NextResponse.json(
         {
@@ -90,7 +95,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. Si el empleado es Activo y requiere validación biométrica, verificar descriptor escaneado
+    // 4. Si el empleado es Activo, verificar descriptor en vivo
     const rawLive = descriptor || liveDescriptor || scannedVector;
     const parsedLive = parseDescriptor(rawLive);
 
@@ -106,8 +111,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-
-    // 4. Decodificar vector guardado en Supabase
+    // 5. Decodificar vector guardado en Supabase
     const savedDescriptor = parseDescriptor(empleado.datos_biometricos);
 
     if (!savedDescriptor || savedDescriptor.length === 0) {
@@ -116,51 +120,59 @@ export async function POST(request: NextRequest) {
           success: false,
           isMatch: false,
           reason: 'corrupted_biometrics',
-          message: 'Los datos biométricos almacenados en la base de datos están dañados.',
+          message: 'Los datos biométricos almacenados en la base de datos están dañados o vacíos.',
           empleado,
         },
         { status: 500 }
       );
     }
 
-    // 5. Comparar descriptores mediante Distancia Euclidiana (umbral < 0.6)
+    // 6. Comparar descriptores mediante Distancia Euclidiana (umbral < 0.6)
     const bioResult = compareDescriptors(parsedLive, savedDescriptor, Number(threshold) || 0.6);
     const { isMatch, distance, score } = bioResult;
 
-    // 6. Determinar si es ENTRADA o SALIDA hoy
+    // 7. Determinar si es ENTRADA o SALIDA hoy
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
 
-    let openAttendance: Asistencia | null = null;
+    const { data: openData } = await supabase
+      .from('asistencias')
+      .select('*')
+      .eq('empleado_id', empleado.id)
+      .eq('fecha', todayStr)
+      .is('hora_salida', null)
+      .order('hora_entrada', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (isSupabaseConfigured) {
-      const { data } = await supabase
-        .from('asistencias')
-        .select('*')
-        .eq('empleado_id', empleado.id)
-        .eq('fecha', todayStr)
-        .is('hora_salida', null)
-        .order('hora_entrada', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (data) openAttendance = data as Asistencia;
-    } else {
-      const allToday = AsistenciasService;
-      const todayRecord = await allToday.getTodayForEmpleado(empleado.id);
-      if (todayRecord && !todayRecord.hora_salida) {
-        openAttendance = todayRecord;
-      }
-    }
-
+    const openAttendance: Asistencia | null = (openData as Asistencia) || null;
     const tipoMarcacion: TipoMarcacion = openAttendance ? 'SALIDA' : 'ENTRADA';
     const estadoFichaje: EstadoFichaje = isMatch ? 'Normal' : 'Requiere_Aprobacion';
 
-    // Subida de foto de excepción si hubo discrepancia y se adjuntó imagen
+    // Subida de foto de excepción si hubo discrepancia
     let fotoUrl: string | null = foto_excepcion || null;
     if (!isMatch && foto_excepcion && foto_excepcion.startsWith('data:image')) {
       try {
-        fotoUrl = await AsistenciasService.uploadExceptionPhoto(foto_excepcion, empleado.id);
+        const filename = `excepcion_${empleado.id}_${Date.now()}.jpg`;
+        const base64Data = foto_excepcion.split(',')[1] || foto_excepcion;
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/jpeg' });
+
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('fotos_excepciones')
+          .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
+
+        if (!uploadErr && uploadData) {
+          const { data: pubUrl } = supabase.storage
+            .from('fotos_excepciones')
+            .getPublicUrl(uploadData.path);
+          fotoUrl = pubUrl.publicUrl;
+        }
       } catch (err) {
         console.warn('No se pudo subir foto de excepción a Storage:', err);
       }
@@ -168,7 +180,7 @@ export async function POST(request: NextRequest) {
 
     let savedAsistencia: Asistencia;
 
-    // 7. Persistir en la tabla asistencias de Supabase
+    // 8. Persistir en la tabla asistencias de Supabase
     if (tipoMarcacion === 'SALIDA' && openAttendance) {
       // Registrar SALIDA
       const horaEntrada = new Date(openAttendance.hora_entrada);
@@ -185,26 +197,21 @@ export async function POST(request: NextRequest) {
         hora_salida: now.toISOString(),
         horas_trabajadas: diffHours,
         horas_extras: horasExtras,
-        // Si ya requería aprobación o falló la salida, mantener Requiere_Aprobacion
         estado_fichaje: isMatch ? openAttendance.estado_fichaje : 'Requiere_Aprobacion',
         foto_excepcion: fotoUrl || openAttendance.foto_excepcion,
       };
 
-      if (isSupabaseConfigured) {
-        const { data, error } = await supabase
-          .from('asistencias')
-          .update(updates)
-          .eq('id', openAttendance.id)
-          .select('*, empleado:empleados(*)')
-          .single();
+      const { data, error } = await supabase
+        .from('asistencias')
+        .update(updates)
+        .eq('id', openAttendance.id)
+        .select('*, empleado:empleados(*)')
+        .single();
 
-        if (error) {
-          throw new Error(`Error al registrar salida en Supabase: ${error.message}`);
-        }
-        savedAsistencia = data as Asistencia;
-      } else {
-        savedAsistencia = await AsistenciasService.clockOut(openAttendance.id, empleado.turno || null);
+      if (error) {
+        throw new Error(`Error al registrar salida en Supabase: ${error.message}`);
       }
+      savedAsistencia = data as Asistencia;
     } else {
       // Registrar ENTRADA
       const insertData = {
@@ -218,25 +225,21 @@ export async function POST(request: NextRequest) {
         horas_extras: null,
       };
 
-      if (isSupabaseConfigured) {
-        const { data, error } = await supabase
-          .from('asistencias')
-          .insert([insertData])
-          .select('*, empleado:empleados(*)')
-          .single();
+      const { data, error } = await supabase
+        .from('asistencias')
+        .insert([insertData])
+        .select('*, empleado:empleados(*)')
+        .single();
 
-        if (error) {
-          throw new Error(`Error al registrar entrada en Supabase: ${error.message}`);
-        }
-        savedAsistencia = data as Asistencia;
-      } else {
-        savedAsistencia = await AsistenciasService.clockIn(empleado.id, estadoFichaje, fotoUrl);
+      if (error) {
+        throw new Error(`Error al registrar entrada en Supabase: ${error.message}`);
       }
+      savedAsistencia = data as Asistencia;
     }
 
     const message = isMatch
-      ? `Marcación de ${tipoMarcacion} registrada correctamente. Identidad confirmada (Distancia: ${distance}).`
-      : `¡ALERTA! Rasgos faciales no coinciden (Distancia: ${distance} >= ${threshold}). Fichaje de ${tipoMarcacion} registrado bajo revisión.`;
+      ? `Marcación de ${tipoMarcacion} registrada correctamente. Identidad confirmada.`
+      : `¡ALERTA! Rasgos faciales no coinciden. Fichaje de ${tipoMarcacion} registrado bajo revisión.`;
 
     return NextResponse.json({
       success: true,

@@ -205,20 +205,18 @@ export const KioskScreen: React.FC = () => {
           }
         }
 
-        // 404 u otro error: NO retornar todavía — intentar fallback local
-        // El empleado puede existir en localStorage si Supabase no lo sincronizó
+        // En caso de incidencia de red con /api/fichar, consultar directamente via EmpleadosService
         if (apiRes.status !== 404) {
           console.warn('[Kiosco] /api/fichar respondió', apiRes.status, data?.message);
         }
 
       } catch (networkErr) {
-        console.warn('[Kiosco] Error de red en /api/fichar, usando servicio local:', networkErr);
+        console.warn('[Kiosco] Error de red en /api/fichar, consultando EmpleadosService:', networkErr);
       }
 
       if (apiHandled) return;
 
-      // 3. Fallback local: buscar empleado via EmpleadosService (lee Supabase o localStorage)
-      //    Necesario cuando el empleado fue creado pero Supabase no lo sincronizó aún
+      // 3. Consulta directa via EmpleadosService en Supabase
       setStatusMessage('Buscando empleado...');
       const empleado = await EmpleadosService.getByDocumento(cleanDoc);
 

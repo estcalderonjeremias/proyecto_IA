@@ -3,11 +3,36 @@
 import React, { useState } from 'react';
 import { KioskScreen } from '@/components/kiosk/KioskScreen';
 import { AdminDashboardView } from '@/components/admin/AdminDashboardView';
+import { AdminAuthModal } from '@/components/admin/AdminAuthModal';
 import { isSupabaseConfigured } from '@/lib/supabaseClient';
-import { Fingerprint, LayoutDashboard, Monitor, Shield, Database, Wifi } from 'lucide-react';
+import { Fingerprint, LayoutDashboard, Monitor, Database, Wifi, Lock } from 'lucide-react';
 
 export default function Home() {
   const [currentView, setCurrentView] = useState<'kiosk' | 'admin'>('kiosk');
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+
+  // Al seleccionar la pestaña Admin, se verifica la clave
+  const handleSelectAdmin = () => {
+    if (isAdminAuthenticated) {
+      setCurrentView('admin');
+    } else {
+      setShowAuthModal(true);
+    }
+  };
+
+  // Al volver al modo Kiosco se bloquea la sesión administrativa
+  const handleBackToKiosk = () => {
+    setIsAdminAuthenticated(false);
+    setShowAuthModal(false);
+    setCurrentView('kiosk');
+  };
+
+  const handleAuthSuccess = () => {
+    setIsAdminAuthenticated(true);
+    setShowAuthModal(false);
+    setCurrentView('admin');
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-text-main">
@@ -15,7 +40,7 @@ export default function Home() {
       <header className="glass-card border-b border-white/10 px-4 sm:px-8 py-3.5 flex items-center justify-between sticky top-0 z-40">
         {/* Marca & Logo */}
         <div
-          onClick={() => setCurrentView('kiosk')}
+          onClick={handleBackToKiosk}
           className="flex items-center gap-3 cursor-pointer group"
         >
           <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-neon-emerald to-neon-green flex items-center justify-center text-black font-bold shadow-neon group-hover:scale-105 transition-transform">
@@ -42,14 +67,14 @@ export default function Home() {
             }`}
           >
             {isSupabaseConfigured ? <Database size={13} /> : <Wifi size={13} />}
-            <span>{isSupabaseConfigured ? 'Supabase Conectado' : 'Modo Demostración / Offline'}</span>
+            <span>{isSupabaseConfigured ? 'Supabase Conectado' : 'Supabase (Verificando credenciales)'}</span>
           </div>
 
           {/* Toggle Kiosco / Admin */}
           <div className="flex bg-surface/80 p-1 rounded-xl border border-white/10">
             <button
               type="button"
-              onClick={() => setCurrentView('kiosk')}
+              onClick={handleBackToKiosk}
               className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
                 currentView === 'kiosk'
                   ? 'bg-neon-green text-black shadow-neon'
@@ -62,14 +87,14 @@ export default function Home() {
 
             <button
               type="button"
-              onClick={() => setCurrentView('admin')}
+              onClick={handleSelectAdmin}
               className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
                 currentView === 'admin'
                   ? 'bg-neon-green text-black shadow-neon'
                   : 'text-text-muted hover:text-white'
               }`}
             >
-              <LayoutDashboard size={14} />
+              {isAdminAuthenticated ? <LayoutDashboard size={14} /> : <Lock size={14} />}
               Admin
             </button>
           </div>
@@ -81,9 +106,16 @@ export default function Home() {
         {currentView === 'kiosk' ? (
           <KioskScreen />
         ) : (
-          <AdminDashboardView onBackToKiosk={() => setCurrentView('kiosk')} />
+          <AdminDashboardView onBackToKiosk={handleBackToKiosk} />
         )}
       </div>
+
+      {/* Modal de Autenticación para ingresar a Admin */}
+      <AdminAuthModal
+        isOpen={showAuthModal}
+        onSuccess={handleAuthSuccess}
+        onCancel={() => setShowAuthModal(false)}
+      />
     </div>
   );
 }

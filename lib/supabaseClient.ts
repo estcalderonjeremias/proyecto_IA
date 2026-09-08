@@ -1,7 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Turno, Empleado, Asistencia, EstadoFichaje } from '@/types/database';
 import { BiometricEngine } from '@/lib/biometrics';
-import { encryptBiometrics } from '@/lib/cryptoBiometrics';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -13,221 +12,142 @@ export const isSupabaseConfigured = Boolean(
   !supabaseAnonKey.includes('placeholder-anon-key')
 );
 
-// Cliente oficial de Supabase para Next.js / Vercel
+if (!isSupabaseConfigured && typeof window !== 'undefined') {
+  console.warn(
+    '[BioAccess Supabase] NEXT_PUBLIC_SUPABASE_URL o NEXT_PUBLIC_SUPABASE_ANON_KEY no están configuradas con valores válidos. Configúralas en .env.local o en las variables de entorno de Vercel.'
+  );
+}
+
+// Cliente oficial de Supabase conectado directamente a PostgreSQL en la nube
 export const supabase = createClient(
-  isSupabaseConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
-  isSupabaseConfigured ? supabaseAnonKey : 'placeholder-key'
+  supabaseUrl || 'https://placeholder-project.supabase.co',
+  supabaseAnonKey || 'placeholder-anon-key',
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  }
 );
 
 // ----------------------------------------------------------------------
-// DATOS MOCK DE PRUEBA (Fallback si Supabase no está conectado)
-// ----------------------------------------------------------------------
-const INITIAL_TURNOS: Turno[] = [
-  {
-    id: '11111111-1111-1111-1111-111111111111',
-    nombre: 'Turno Mañana (08:00 - 16:00)',
-    hora_ingreso: '08:00:00',
-    hora_salida: '16:00:00',
-    max_horas_extras: 2,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: '22222222-2222-2222-2222-222222222222',
-    nombre: 'Turno Tarde (14:00 - 22:00)',
-    hora_ingreso: '14:00:00',
-    hora_salida: '22:00:00',
-    max_horas_extras: 3,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: '33333333-3333-3333-3333-333333333333',
-    nombre: 'Turno Noche (22:00 - 06:00)',
-    hora_ingreso: '22:00:00',
-    hora_salida: '06:00:00',
-    max_horas_extras: 2,
-    created_at: new Date().toISOString()
-  }
-];
-
-const INITIAL_EMPLEADOS: Empleado[] = [
-  {
-    id: 'e1111111-1111-1111-1111-111111111111',
-    documento: '40123456',
-    nombre_completo: 'Carlos Eduardo Ramírez',
-    turno_id: '11111111-1111-1111-1111-111111111111',
-    estado: 'Pendiente_Biometria',
-    datos_biometricos: null,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'e2222222-2222-2222-2222-222222222222',
-    documento: '38987654',
-    nombre_completo: 'María Valentina Gómez',
-    turno_id: '11111111-1111-1111-1111-111111111111',
-    estado: 'Activo',
-    datos_biometricos: encryptBiometrics(new Array(128).fill(0).map((_, i) => Math.sin(i / 10))),
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'e3333333-3333-3333-3333-333333333333',
-    documento: '45678901',
-    nombre_completo: 'Alejandro Morales',
-    turno_id: '22222222-2222-2222-2222-222222222222',
-    estado: 'Pendiente_Biometria',
-    datos_biometricos: null,
-    created_at: new Date().toISOString()
-  }
-];
-
-class StorageMock {
-  private get<T>(key: string, def: T): T {
-    if (typeof window === 'undefined') return def;
-    try {
-      const item = localStorage.getItem(`bioaccess_${key}`);
-      return item ? JSON.parse(item) : def;
-    } catch {
-      return def;
-    }
-  }
-
-  private set<T>(key: string, val: T): void {
-    if (typeof window === 'undefined') return;
-    try {
-      localStorage.setItem(`bioaccess_${key}`, JSON.stringify(val));
-    } catch {
-      // Ignore
-    }
-  }
-
-  getTurnos(): Turno[] { return this.get<Turno[]>('turnos', INITIAL_TURNOS); }
-  setTurnos(t: Turno[]) { this.set('turnos', t); }
-
-  getEmpleados(): Empleado[] { return this.get<Empleado[]>('empleados', INITIAL_EMPLEADOS); }
-  setEmpleados(e: Empleado[]) { this.set('empleados', e); }
-
-  getAsistencias(): Asistencia[] { return this.get<Asistencia[]>('asistencias', []); }
-  setAsistencias(a: Asistencia[]) { this.set('asistencias', a); }
-}
-
-const mockStore = new StorageMock();
-
-// ----------------------------------------------------------------------
-// SERVICIOS: TURNOS
+// SERVICIOS: TURNOS (Persistencia directa en PostgreSQL Supabase)
 // ----------------------------------------------------------------------
 export const TurnosService = {
   async getAll(): Promise<Turno[]> {
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('turnos').select('*').order('nombre');
-      if (!error && data) return data as Turno[];
+    const { data, error } = await supabase
+      .from('turnos')
+      .select('*')
+      .order('nombre');
+
+    if (error) {
+      console.error('[TurnosService.getAll] Error consultando Supabase:', error.message);
+      throw new Error(`Error al consultar turnos en Supabase: ${error.message}`);
     }
-    return mockStore.getTurnos();
+    return (data || []) as Turno[];
   },
 
   async create(turno: Omit<Turno, 'id' | 'created_at'>): Promise<Turno> {
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('turnos').insert([turno]).select().single();
-      if (!error && data) return data as Turno;
+    const { data, error } = await supabase
+      .from('turnos')
+      .insert([turno])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[TurnosService.create] Error en Supabase:', error.message);
+      throw new Error(`Error al crear turno en Supabase: ${error.message}`);
     }
-    const newT: Turno = {
-      ...turno,
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString()
-    };
-    const list = mockStore.getTurnos();
-    list.push(newT);
-    mockStore.setTurnos(list);
-    return newT;
+    return data as Turno;
   },
 
   async update(id: string, updates: Partial<Turno>): Promise<void> {
-    if (isSupabaseConfigured) {
-      await supabase.from('turnos').update(updates).eq('id', id);
-      return;
+    const { error } = await supabase
+      .from('turnos')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error('[TurnosService.update] Error en Supabase:', error.message);
+      throw new Error(`Error al actualizar turno en Supabase: ${error.message}`);
     }
-    const list = mockStore.getTurnos().map(t => t.id === id ? { ...t, ...updates } : t);
-    mockStore.setTurnos(list);
   },
 
   async delete(id: string): Promise<void> {
-    if (isSupabaseConfigured) {
-      await supabase.from('turnos').delete().eq('id', id);
-      return;
+    const { error } = await supabase
+      .from('turnos')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('[TurnosService.delete] Error en Supabase:', error.message);
+      throw new Error(`Error al eliminar turno en Supabase: ${error.message}`);
     }
-    const list = mockStore.getTurnos().filter(t => t.id !== id);
-    mockStore.setTurnos(list);
   }
 };
 
 // ----------------------------------------------------------------------
-// SERVICIOS: EMPLEADOS
+// SERVICIOS: EMPLEADOS (Persistencia directa en PostgreSQL Supabase)
 // ----------------------------------------------------------------------
 export const EmpleadosService = {
   async getAll(): Promise<Empleado[]> {
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('empleados').select('*, turno:turnos(*)').order('nombre_completo');
-      if (!error && data) return data as Empleado[];
+    const { data, error } = await supabase
+      .from('empleados')
+      .select('*, turno:turnos(*)')
+      .order('nombre_completo');
+
+    if (error) {
+      console.error('[EmpleadosService.getAll] Error consultando Supabase:', error.message);
+      throw new Error(`Error al consultar empleados en Supabase: ${error.message}`);
     }
-    const turnos = mockStore.getTurnos();
-    return mockStore.getEmpleados().map(e => ({
-      ...e,
-      turno: turnos.find(t => t.id === e.turno_id)
-    }));
+    return (data || []) as Empleado[];
   },
 
   async getByDocumento(doc: string): Promise<Empleado | null> {
     const cleanDoc = doc.trim();
-    if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('empleados')
-          .select('*, turno:turnos(*)')
-          .eq('documento', cleanDoc)
-          .maybeSingle();
-        if (!error && data) return data as Empleado;
-      } catch (err) {
-        console.warn('[EmpleadosService] Error consultando Supabase:', err);
-      }
-    }
-    // Fallback: verificar lista completa de mockStore / localStorage
-    const turnos = mockStore.getTurnos();
-    const localList = mockStore.getEmpleados().map(e => ({
-      ...e,
-      turno: turnos.find(t => t.id === e.turno_id)
-    }));
-    const foundLocal = localList.find(e => e.documento === cleanDoc);
-    if (foundLocal) return foundLocal;
+    if (!cleanDoc) return null;
 
-    const list = await this.getAll();
-    return list.find(e => e.documento === cleanDoc) || null;
+    const { data, error } = await supabase
+      .from('empleados')
+      .select('*, turno:turnos(*)')
+      .eq('documento', cleanDoc)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[EmpleadosService.getByDocumento] Error consultando Supabase:', error.message);
+      throw new Error(`Error al buscar empleado por DNI en Supabase: ${error.message}`);
+    }
+    return (data as Empleado) || null;
   },
 
   async create(emp: Omit<Empleado, 'id' | 'created_at'>): Promise<Empleado> {
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('empleados').insert([emp]).select().single();
-      if (!error && data) return data as Empleado;
+    const { data, error } = await supabase
+      .from('empleados')
+      .insert([emp])
+      .select('*, turno:turnos(*)')
+      .single();
+
+    if (error) {
+      console.error('[EmpleadosService.create] Error en Supabase:', error.message);
+      throw new Error(`Error al crear empleado en Supabase: ${error.message}`);
     }
-    const newEmp: Empleado = {
-      ...emp,
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString()
-    };
-    const list = mockStore.getEmpleados();
-    list.push(newEmp);
-    mockStore.setEmpleados(list);
-    return newEmp;
+    return data as Empleado;
   },
 
   async update(id: string, updates: Partial<Empleado>): Promise<void> {
-    if (isSupabaseConfigured) {
-      await supabase.from('empleados').update(updates).eq('id', id);
-      return;
+    const { error } = await supabase
+      .from('empleados')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      console.error('[EmpleadosService.update] Error en Supabase:', error.message);
+      throw new Error(`Error al actualizar empleado en Supabase: ${error.message}`);
     }
-    const list = mockStore.getEmpleados().map(e => e.id === id ? { ...e, ...updates } : e);
-    mockStore.setEmpleados(list);
   },
 
   async saveBiometrics(id: string, descriptor: number[]): Promise<void> {
-    // Intentar via API server-side (encripta y guarda en Supabase)
+    // Si estamos en el navegador, invocamos la ruta API centralizada de enrolamiento
     if (typeof window !== 'undefined') {
       const res = await fetch('/api/empleados/enrolar', {
         method: 'POST',
@@ -241,57 +161,67 @@ export const EmpleadosService = {
       return;
     }
 
-    // Fallback directo solo en entorno sin window (SSR)
-    await this.update(id, {
-      datos_biometricos: descriptor,
-      estado: 'Activo',
-    });
+    // Actualización directa en Supabase
+    const { error } = await supabase
+      .from('empleados')
+      .update({
+        datos_biometricos: descriptor,
+        estado: 'Activo',
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error('[EmpleadosService.saveBiometrics] Error en Supabase:', error.message);
+      throw new Error(`Error al guardar biometría en Supabase: ${error.message}`);
+    }
   },
 
   async delete(id: string): Promise<void> {
-    if (isSupabaseConfigured) {
-      await supabase.from('empleados').delete().eq('id', id);
-      return;
+    const { error } = await supabase
+      .from('empleados')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('[EmpleadosService.delete] Error en Supabase:', error.message);
+      throw new Error(`Error al eliminar empleado en Supabase: ${error.message}`);
     }
-    const list = mockStore.getEmpleados().filter(e => e.id !== id);
-    mockStore.setEmpleados(list);
   }
 };
 
 // ----------------------------------------------------------------------
-// SERVICIOS: ASISTENCIAS
+// SERVICIOS: ASISTENCIAS (Persistencia directa en PostgreSQL Supabase)
 // ----------------------------------------------------------------------
 export const AsistenciasService = {
   async getAll(): Promise<Asistencia[]> {
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase
-        .from('asistencias')
-        .select('*, empleado:empleados(*)')
-        .order('created_at', { ascending: false });
-      if (!error && data) return data as Asistencia[];
+    const { data, error } = await supabase
+      .from('asistencias')
+      .select('*, empleado:empleados(*, turno:turnos(*))')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('[AsistenciasService.getAll] Error consultando Supabase:', error.message);
+      throw new Error(`Error al consultar asistencias en Supabase: ${error.message}`);
     }
-    const emps = await EmpleadosService.getAll();
-    return mockStore.getAsistencias().map(a => ({
-      ...a,
-      empleado: emps.find(e => e.id === a.empleado_id)
-    })).sort((a, b) => new Date(b.hora_entrada).getTime() - new Date(a.hora_entrada).getTime());
+    return (data || []) as Asistencia[];
   },
 
   async getTodayForEmpleado(empleadoId: string): Promise<Asistencia | null> {
     const todayStr = new Date().toISOString().split('T')[0];
-    if (isSupabaseConfigured) {
-      const { data } = await supabase
-        .from('asistencias')
-        .select('*')
-        .eq('empleado_id', empleadoId)
-        .eq('fecha', todayStr)
-        .order('hora_entrada', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (data) return data as Asistencia;
+    const { data, error } = await supabase
+      .from('asistencias')
+      .select('*')
+      .eq('empleado_id', empleadoId)
+      .eq('fecha', todayStr)
+      .order('hora_entrada', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[AsistenciasService.getTodayForEmpleado] Error consultando Supabase:', error.message);
+      throw new Error(`Error al consultar asistencia del día en Supabase: ${error.message}`);
     }
-    const list = mockStore.getAsistencias();
-    return list.find(a => a.empleado_id === empleadoId && a.fecha === todayStr) || null;
+    return (data as Asistencia) || null;
   },
 
   async clockIn(
@@ -313,37 +243,34 @@ export const AsistenciasService = {
       horas_extras: null
     };
 
-    if (isSupabaseConfigured) {
-      const { data, error } = await supabase.from('asistencias').insert([asistenciaData]).select().single();
-      if (!error && data) return data as Asistencia;
-    }
+    const { data, error } = await supabase
+      .from('asistencias')
+      .insert([asistenciaData])
+      .select('*, empleado:empleados(*, turno:turnos(*))')
+      .single();
 
-    const newRecord: Asistencia = {
-      ...asistenciaData,
-      id: crypto.randomUUID(),
-      created_at: now.toISOString()
-    };
-    const list = mockStore.getAsistencias();
-    list.unshift(newRecord);
-    mockStore.setAsistencias(list);
-    return newRecord;
+    if (error) {
+      console.error('[AsistenciasService.clockIn] Error en Supabase:', error.message);
+      throw new Error(`Error al registrar entrada en Supabase: ${error.message}`);
+    }
+    return data as Asistencia;
   },
 
   async clockOut(asistenciaId: string, turno: Turno | null): Promise<Asistencia> {
     const now = new Date();
-    let currentRecord: Asistencia | undefined;
+    const { data: currentRecord, error: fetchErr } = await supabase
+      .from('asistencias')
+      .select('*')
+      .eq('id', asistenciaId)
+      .single();
 
-    if (isSupabaseConfigured) {
-      const { data } = await supabase.from('asistencias').select('*').eq('id', asistenciaId).single();
-      currentRecord = data as Asistencia;
-    } else {
-      currentRecord = mockStore.getAsistencias().find(a => a.id === asistenciaId);
+    if (fetchErr || !currentRecord) {
+      console.error('[AsistenciasService.clockOut] Error buscando registro:', fetchErr?.message);
+      throw new Error('Registro de entrada no encontrado en Supabase');
     }
 
-    if (!currentRecord) throw new Error('Registro de entrada no encontrado');
-
     const horaEntrada = new Date(currentRecord.hora_entrada);
-    const diffMs = now.getTime() - horaEntrada.getTime();
+    const diffMs = Math.max(0, now.getTime() - horaEntrada.getTime());
     const diffHours = Number((diffMs / (1000 * 60 * 60)).toFixed(2));
 
     let horasExtras = 0;
@@ -358,45 +285,48 @@ export const AsistenciasService = {
       horas_extras: horasExtras
     };
 
-    if (isSupabaseConfigured) {
-      const { data } = await supabase.from('asistencias').update(updates).eq('id', asistenciaId).select().single();
-      if (data) return data as Asistencia;
-    }
+    const { data, error: updateErr } = await supabase
+      .from('asistencias')
+      .update(updates)
+      .eq('id', asistenciaId)
+      .select('*, empleado:empleados(*, turno:turnos(*))')
+      .single();
 
-    const updatedList = mockStore.getAsistencias().map(a => 
-      a.id === asistenciaId ? { ...a, ...updates } : a
-    );
-    mockStore.setAsistencias(updatedList);
-    return { ...currentRecord, ...updates };
+    if (updateErr) {
+      console.error('[AsistenciasService.clockOut] Error actualizando Supabase:', updateErr.message);
+      throw new Error(`Error al registrar salida en Supabase: ${updateErr.message}`);
+    }
+    return data as Asistencia;
   },
 
   async updateEstado(id: string, estado: EstadoFichaje): Promise<void> {
-    if (isSupabaseConfigured) {
-      await supabase.from('asistencias').update({ estado_fichaje: estado }).eq('id', id);
-      return;
+    const { error } = await supabase
+      .from('asistencias')
+      .update({ estado_fichaje: estado })
+      .eq('id', id);
+
+    if (error) {
+      console.error('[AsistenciasService.updateEstado] Error en Supabase:', error.message);
+      throw new Error(`Error al actualizar estado en Supabase: ${error.message}`);
     }
-    const list = mockStore.getAsistencias().map(a => a.id === id ? { ...a, estado_fichaje: estado } : a);
-    mockStore.setAsistencias(list);
   },
 
   async uploadExceptionPhoto(base64Photo: string, empleadoId: string): Promise<string> {
     const filename = `excepcion_${empleadoId}_${Date.now()}.jpg`;
-    if (isSupabaseConfigured) {
-      try {
-        const blob = BiometricEngine.dataURLtoBlob(base64Photo);
-        const { data, error } = await supabase.storage
-          .from('fotos_excepciones')
-          .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
+    try {
+      const blob = BiometricEngine.dataURLtoBlob(base64Photo);
+      const { data, error } = await supabase.storage
+        .from('fotos_excepciones')
+        .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
 
-        if (!error && data) {
-          const { data: publicUrlData } = supabase.storage
-            .from('fotos_excepciones')
-            .getPublicUrl(data.path);
-          return publicUrlData.publicUrl;
-        }
-      } catch (err) {
-        console.warn('Error al subir imagen a Supabase Storage:', err);
+      if (!error && data) {
+        const { data: publicUrlData } = supabase.storage
+          .from('fotos_excepciones')
+          .getPublicUrl(data.path);
+        return publicUrlData.publicUrl;
       }
+    } catch (err) {
+      console.warn('Error al subir imagen a Supabase Storage:', err);
     }
     return base64Photo;
   }
