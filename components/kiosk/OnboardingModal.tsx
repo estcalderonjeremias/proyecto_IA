@@ -145,32 +145,30 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         estado: 'Activo',
       };
 
-      if (isSupabaseConfigured) {
-        // Con Supabase real: llamar a la API route en el servidor
-        const enrollRes = await fetch('/api/empleados/enrolar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            empleado_id: empleado.id,
-            documento: empleado.documento,
-            nombre_completo: empleado.nombre_completo,
-            turno_id: empleado.turno_id,
-            descriptor,
-          }),
-        });
+      // Llamar a la API route en el servidor para persistir la biometría y estado Activo
+      const enrollRes = await fetch('/api/empleados/enrolar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          empleado_id: empleado.id,
+          documento: empleado.documento,
+          nombre_completo: empleado.nombre_completo,
+          turno_id: empleado.turno_id,
+          descriptor,
+        }),
+      });
 
-        const enrollData = await enrollRes.json().catch(() => ({ success: false, message: 'Error al leer la respuesta del servidor.' }));
+      const enrollData = await enrollRes.json().catch(() => ({ success: false, message: 'Error al leer la respuesta del servidor.' }));
 
-        if (!enrollRes.ok || !enrollData.success) {
-          throw new Error(
-            enrollData.message || `Error del servidor (${enrollRes.status}) al guardar la biometría.`
-          );
-        }
+      if (!enrollRes.ok || !enrollData.success) {
+        throw new Error(
+          enrollData.message || `Error del servidor (${enrollRes.status}) al guardar la biometría.`
+        );
+      }
 
-        // Usar el empleado devuelto por Supabase pero preservar el ID original
-        if (enrollData.empleado) {
-          Object.assign(updated, enrollData.empleado, { id: empleado.id });
-        }
+      // Actualizar datos devueltos por el servidor preservando el ID
+      if (enrollData.empleado) {
+        Object.assign(updated, enrollData.empleado, { id: empleado.id });
       }
 
       // Siempre actualizar el LocalStore del cliente con el empleado original

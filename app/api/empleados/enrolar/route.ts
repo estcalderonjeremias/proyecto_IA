@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseDescriptor } from '@/lib/biometrics';
-import { isSupabaseConfigured, supabase, EmpleadosService, LocalStore, TurnosService } from '@/lib/supabaseClient';
+import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { ServerStore } from '@/lib/serverStore';
 import { Empleado } from '@/types/database';
 
 export const dynamic = 'force-dynamic';
@@ -128,15 +129,15 @@ export async function POST(request: NextRequest) {
     }
 
     // ---------------------------------------------------------------
-    // MODO LOCAL (Supabase no configurado): operamos sobre LocalStore
+    // MODO LOCAL / CENTRAL (Supabase no configurado): operamos sobre ServerStore
     // ---------------------------------------------------------------
     let existingLocal: Empleado | null = null;
 
     if (empleado_id) {
-      existingLocal = LocalStore.getEmpleados().find(e => e.id === empleado_id) || null;
+      existingLocal = ServerStore.getEmpleados().find(e => e.id === empleado_id) || null;
     }
     if (!existingLocal && cleanDoc) {
-      existingLocal = LocalStore.getEmpleados().find(e => e.documento === cleanDoc) || null;
+      existingLocal = ServerStore.getEmpleados().find(e => e.documento === cleanDoc) || null;
     }
 
     if (existingLocal) {
@@ -149,20 +150,20 @@ export async function POST(request: NextRequest) {
           : {}),
         ...(turno_id !== undefined ? { turno_id: turno_id || null } : {}),
       };
-      LocalStore.saveEmpleado(updated);
+      ServerStore.saveEmpleado(updated);
 
       // Enriquecer con turno para la respuesta
-      const turnos = LocalStore.getTurnos();
+      const turnos = ServerStore.getTurnos();
       const empleadoConTurno = { ...updated, turno: turnos.find(t => t.id === updated.turno_id) };
 
       return NextResponse.json({
         success: true,
-        message: `Enrolamiento local completado para ${updated.nombre_completo}. Estado: Activo.`,
+        message: `Enrolamiento completado para ${updated.nombre_completo}. Estado: Activo.`,
         empleado: empleadoConTurno,
       });
     }
 
-    // Crear empleado nuevo en LocalStore
+    // Crear empleado nuevo en ServerStore
     const newEmployee: Empleado = {
       id: crypto.randomUUID(),
       documento: cleanDoc,
@@ -172,15 +173,15 @@ export async function POST(request: NextRequest) {
       datos_biometricos: parsedVector,
       created_at: new Date().toISOString(),
     };
-    LocalStore.saveEmpleado(newEmployee);
+    ServerStore.saveEmpleado(newEmployee);
 
-    const turnos = LocalStore.getTurnos();
+    const turnos = ServerStore.getTurnos();
     const empleadoConTurno = { ...newEmployee, turno: turnos.find(t => t.id === newEmployee.turno_id) };
 
     return NextResponse.json(
       {
         success: true,
-        message: `Nuevo empleado registrado localmente y enrolado. Estado: Activo.`,
+        message: `Nuevo empleado registrado y enrolado. Estado: Activo.`,
         empleado: empleadoConTurno,
       },
       { status: 201 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSupabaseConfigured, supabase, EmpleadosService, AsistenciasService, LocalStore } from '@/lib/supabaseClient';
+import { isSupabaseConfigured, supabase, AsistenciasService } from '@/lib/supabaseClient';
+import { ServerStore } from '@/lib/serverStore';
 import { compareDescriptors, parseDescriptor } from '@/lib/biometrics';
 import { Empleado, Asistencia, TipoMarcacion, EstadoFichaje } from '@/types/database';
 
@@ -54,9 +55,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fallback local si Supabase no entregó el empleado
+    // Fallback local/central si Supabase no entregó el empleado
     if (!empleado) {
-      empleado = await EmpleadosService.getByDocumento(cleanDoc);
+      const serverEmp = ServerStore.getEmpleados().find(e => e.documento === cleanDoc);
+      if (serverEmp) {
+        const turnos = ServerStore.getTurnos();
+        empleado = {
+          ...serverEmp,
+          turno: turnos.find(t => t.id === serverEmp.turno_id)
+        };
+      }
     }
 
     if (!empleado) {
@@ -160,10 +168,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fallback local
+    // Fallback local/central
     if (!openAttendance) {
-      const localRecords = LocalStore.getAsistencias();
-      openAttendance = localRecords.find(
+      const serverRecords = ServerStore.getAsistencias();
+      openAttendance = serverRecords.find(
         a => a.empleado_id === empleado!.id && a.fecha === todayStr && !a.hora_salida
       ) || null;
     }
@@ -205,13 +213,45 @@ export async function POST(request: NextRequest) {
     if (tipoMarcacion === 'SALIDA' && openAttendance) {
       // Registrar SALIDA
       const turnoEmpleado = (empleado as Empleado & { turno?: { max_horas_extras?: number } }).turno;
-      savedAsistencia = await AsistenciasService.clockOut(
-        openAttendance.id,
-        turnoEmpleado || null
-      );
+      if (isSupabaseConfigured) {
+        savedAsistencia = await AsistenciasService.clockOut(
+          openAttendance.id,
+          turnoEmpleado || null
+        );
+      } else {
+        const entrada = new Date(openAttendance.hora_entrada);
+        const diffMs = now.getTime() - entrada.getTime();
+        const horasTrabajadas = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+        const maxExtras = turnoEmpleado?.max_horas_extras ?? 2;
+        const horasStandard = 8;
+        const extras = Math.min(Math.max(0, horasTrabajadas - horasStandard), maxExtras);
+        const updatedRecord: Asistencia = {
+          ...openAttendance,
+          hora_salida: now.toISOString(),
+          horas_trabajadas: horasTrabajadas,
+          horas_extras: Math.round(extras * 100) / 100
+        };
+        savedAsistencia = ServerStore.saveAsistencia(updatedRecord);
+      }
     } else {
       // Registrar ENTRADA
-      savedAsistencia = await AsistenciasService.clockIn(empleado.id, estadoFichaje, fotoUrl);
+      if (isSupabaseConfigured) {
+        savedAsistencia = await AsistenciasService.clockIn(empleado.id, estadoFichaje, fotoUrl);
+      } else {
+        const newRecord: Asistencia = {
+          id: crypto.randomUUID(),
+          empleado_id: empleado.id,
+          fecha: todayStr,
+          hora_entrada: now.toISOString(),
+          hora_salida: null,
+          estado_fichaje: estadoFichaje,
+          foto_excepcion: fotoUrl,
+          horas_trabajadas: null,
+          horas_extras: null,
+          created_at: now.toISOString()
+        };
+        savedAsistencia = ServerStore.saveAsistencia(newRecord);
+      }
     }
 
     const message = isMatch

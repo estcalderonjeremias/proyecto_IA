@@ -145,6 +145,55 @@ class LocalStoreManager {
 export const LocalStore = new LocalStoreManager();
 
 // ----------------------------------------------------------------------
+// SINCRONIZACIÓN CENTRAL EN RED LOCAL (Multi-dispositivo sin Supabase)
+// ----------------------------------------------------------------------
+async function syncServer(action?: string, data?: unknown) {
+  if (typeof window === 'undefined') return null;
+  try {
+    if (!action) {
+      const res = await fetch('/api/sync', { cache: 'no-store' });
+      if (res.ok) {
+        const json = await res.json();
+        return json.success ? json.data : null;
+      }
+    } else {
+      const res = await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, data }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return json.success ? json.data : null;
+      }
+    }
+  } catch (err) {
+    console.warn('[syncServer] Error de sincronización con el servidor central:', err);
+  }
+  return null;
+}
+
+// Subir datos locales guardados previamente en este navegador al servidor central al cargar
+if (typeof window !== 'undefined') {
+  setTimeout(async () => {
+    try {
+      const localTurnos = LocalStore.getTurnos();
+      const localEmpleados = LocalStore.getEmpleados();
+      const localAsistencias = LocalStore.getAsistencias();
+      if (localEmpleados.length > 0 || localTurnos.length > 0) {
+        await syncServer('bulkMerge', {
+          turnos: localTurnos,
+          empleados: localEmpleados,
+          asistencias: localAsistencias,
+        });
+      }
+    } catch {
+      // Ignorar errores de conexión inicial
+    }
+  }, 400);
+}
+
+// ----------------------------------------------------------------------
 // SERVICIOS: TURNOS
 // ----------------------------------------------------------------------
 export const TurnosService = {
@@ -171,7 +220,16 @@ export const TurnosService = {
       } catch (err) {
         console.warn('[TurnosService.getAll] Fallo de conexión con Supabase:', err);
       }
+      return localTurnos;
     }
+
+    // Modo Servidor Central (Sincronizado entre dispositivos)
+    const serverData = await syncServer();
+    if (serverData && Array.isArray(serverData.turnos)) {
+      LocalStore.setTurnos(serverData.turnos);
+      return serverData.turnos;
+    }
+
     return localTurnos;
   },
 
@@ -210,6 +268,9 @@ export const TurnosService = {
       } catch (err) {
         console.warn('[TurnosService.create] Error de conexión con Supabase:', err);
       }
+    } else {
+      // Guardar en el servidor central
+      await syncServer('saveTurno', newTurno);
     }
 
     return newTurno;
@@ -217,8 +278,9 @@ export const TurnosService = {
 
   async update(id: string, updates: Partial<Turno>): Promise<void> {
     const current = LocalStore.getTurnos().find(t => t.id === id);
-    if (current) {
-      LocalStore.saveTurno({ ...current, ...updates });
+    const updated = current ? { ...current, ...updates } : null;
+    if (updated) {
+      LocalStore.saveTurno(updated);
     }
 
     if (isSupabaseConfigured) {
@@ -234,6 +296,8 @@ export const TurnosService = {
       } catch (err) {
         console.warn('[TurnosService.update] Conexión fallida con Supabase:', err);
       }
+    } else if (updated) {
+      await syncServer('saveTurno', updated);
     }
   },
 
@@ -253,6 +317,8 @@ export const TurnosService = {
       } catch (err) {
         console.warn('[TurnosService.delete] Conexión fallida con Supabase:', err);
       }
+    } else {
+      await syncServer('deleteTurno', { id });
     }
   }
 };
@@ -286,6 +352,20 @@ export const EmpleadosService = {
       } catch (err) {
         console.warn('[EmpleadosService.getAll] Fallo de conexión con Supabase:', err);
       }
+      return localEmpleados.map(e => ({
+        ...e,
+        turno: turnos.find(t => t.id === e.turno_id)
+      }));
+    }
+
+    // Modo Servidor Central (Sincronizado entre computadoras y celulares)
+    const serverData = await syncServer();
+    if (serverData && Array.isArray(serverData.empleados)) {
+      LocalStore.setEmpleados(serverData.empleados);
+      return serverData.empleados.map((e: Empleado) => ({
+        ...e,
+        turno: turnos.find(t => t.id === e.turno_id)
+      }));
     }
 
     return localEmpleados.map(e => ({
@@ -318,7 +398,17 @@ export const EmpleadosService = {
     }
 
     const turnos = await TurnosService.getAll();
-    const local = LocalStore.getEmpleados().find(e => e.documento === cleanDoc);
+    let local = LocalStore.getEmpleados().find(e => e.documento === cleanDoc);
+
+    // Si no está en LocalStore, consultar al servidor central
+    if (!local) {
+      const serverData = await syncServer();
+      if (serverData && Array.isArray(serverData.empleados)) {
+        LocalStore.setEmpleados(serverData.empleados);
+        local = serverData.empleados.find((e: Empleado) => e.documento === cleanDoc);
+      }
+    }
+
     if (local) {
       return {
         ...local,
@@ -363,12 +453,21 @@ export const EmpleadosService = {
       } catch (err) {
         console.warn('[EmpleadosService.create] Conexión fallida con Supabase, guardando local:', err);
       }
+    } else {
+      // Guardar en el servidor central
+      await syncServer('saveEmpleado', newEmp);
     }
 
     return newEmp;
   },
 
   async update(id: string, updates: Partial<Empleado>): Promise<void> {
+    const current = LocalStore.getEmpleados().find(e => e.id === id);
+    const updated = current ? { ...current, ...updates } : null;
+    if (updated) {
+      LocalStore.saveEmpleado(updated);
+    }
+
     if (isSupabaseConfigured) {
       try {
         const { error } = await supabase
@@ -382,11 +481,9 @@ export const EmpleadosService = {
       } catch (err) {
         console.warn('[EmpleadosService.update] Conexión fallida con Supabase:', err);
       }
-    }
-
-    const current = LocalStore.getEmpleados().find(e => e.id === id);
-    if (current) {
-      LocalStore.saveEmpleado({ ...current, ...updates });
+    } else if (updated) {
+      // Guardar en el servidor central
+      await syncServer('saveEmpleado', updated);
     }
   },
 
@@ -415,6 +512,8 @@ export const EmpleadosService = {
   },
 
   async delete(id: string): Promise<void> {
+    LocalStore.deleteEmpleado(id);
+
     if (isSupabaseConfigured) {
       try {
         const { error } = await supabase
@@ -428,8 +527,9 @@ export const EmpleadosService = {
       } catch (err) {
         console.warn('[EmpleadosService.delete] Conexión fallida con Supabase:', err);
       }
+    } else {
+      await syncServer('deleteEmpleado', { id });
     }
-    LocalStore.deleteEmpleado(id);
   }
 };
 
@@ -454,6 +554,11 @@ export const AsistenciasService = {
         }
       } catch (err) {
         console.warn('[AsistenciasService.getAll] Fallo de conexión con Supabase:', err);
+      }
+    } else {
+      const serverData = await syncServer();
+      if (serverData && Array.isArray(serverData.asistencias)) {
+        LocalStore.setAsistencias(serverData.asistencias);
       }
     }
 
@@ -483,6 +588,11 @@ export const AsistenciasService = {
         }
       } catch (err) {
         console.warn('[AsistenciasService.getTodayForEmpleado] Fallo conexión Supabase:', err);
+      }
+    } else {
+      const serverData = await syncServer();
+      if (serverData && Array.isArray(serverData.asistencias)) {
+        LocalStore.setAsistencias(serverData.asistencias);
       }
     }
 
@@ -536,6 +646,11 @@ export const AsistenciasService = {
       created_at: now.toISOString()
     };
     LocalStore.saveAsistencia(newRecord);
+
+    if (!isSupabaseConfigured) {
+      await syncServer('saveAsistencia', newRecord);
+    }
+
     return newRecord;
   },
 
@@ -553,6 +668,12 @@ export const AsistenciasService = {
         if (data) currentRecord = data as Asistencia;
       } catch {
         // Use local currentRecord
+      }
+    } else if (!currentRecord) {
+      const serverData = await syncServer();
+      if (serverData && Array.isArray(serverData.asistencias)) {
+        LocalStore.setAsistencias(serverData.asistencias);
+        currentRecord = serverData.asistencias.find((a: Asistencia) => a.id === asistenciaId);
       }
     }
 
@@ -597,10 +718,24 @@ export const AsistenciasService = {
 
     const updatedRecord: Asistencia = { ...currentRecord, ...updates };
     LocalStore.saveAsistencia(updatedRecord);
+
+    if (!isSupabaseConfigured) {
+      await syncServer('saveAsistencia', updatedRecord);
+    }
+
     return updatedRecord;
   },
 
   async updateEstado(id: string, estado: EstadoFichaje): Promise<void> {
+    const current = LocalStore.getAsistencias().find(a => a.id === id);
+    if (current) {
+      const updated = { ...current, estado_fichaje: estado };
+      LocalStore.saveAsistencia(updated);
+      if (!isSupabaseConfigured) {
+        await syncServer('saveAsistencia', updated);
+      }
+    }
+
     if (isSupabaseConfigured) {
       try {
         await supabase
@@ -610,11 +745,6 @@ export const AsistenciasService = {
       } catch (err) {
         console.warn('[AsistenciasService.updateEstado] Error en Supabase:', err);
       }
-    }
-
-    const current = LocalStore.getAsistencias().find(a => a.id === id);
-    if (current) {
-      LocalStore.saveAsistencia({ ...current, estado_fichaje: estado });
     }
   },
 
