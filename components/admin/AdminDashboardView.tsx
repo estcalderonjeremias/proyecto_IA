@@ -23,7 +23,8 @@ import {
   Shield,
   LogOut,
   X,
-  Check
+  Check,
+  Loader2
 } from 'lucide-react';
 
 interface AdminDashboardViewProps {
@@ -58,6 +59,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
   const [turnoIngreso, setTurnoIngreso] = useState('08:00');
   const [turnoSalida, setTurnoSalida] = useState('16:00');
   const [turnoMaxExtras, setTurnoMaxExtras] = useState(2);
+  const [isSavingTurno, setIsSavingTurno] = useState(false);
+  const [turnoError, setTurnoError] = useState<string | null>(null);
+  const [isSavingEmp, setIsSavingEmp] = useState(false);
+  const [empError, setEmpError] = useState<string | null>(null);
 
   const loadAllData = async () => {
     setLoading(true);
@@ -123,24 +128,34 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
     e.preventDefault();
     if (!empDoc.trim() || !empName.trim()) return;
 
-    if (editingEmp) {
-      await EmpleadosService.update(editingEmp.id, {
-        documento: empDoc.trim(),
-        nombre_completo: empName.trim(),
-        turno_id: empTurnoId || null,
-        estado: empEstado,
-      });
-    } else {
-      await EmpleadosService.create({
-        documento: empDoc.trim(),
-        nombre_completo: empName.trim(),
-        turno_id: empTurnoId || null,
-        estado: empEstado,
-        datos_biometricos: null,
-      });
+    setIsSavingEmp(true);
+    setEmpError(null);
+
+    try {
+      if (editingEmp) {
+        await EmpleadosService.update(editingEmp.id, {
+          documento: empDoc.trim(),
+          nombre_completo: empName.trim(),
+          turno_id: empTurnoId || null,
+          estado: empEstado,
+        });
+      } else {
+        await EmpleadosService.create({
+          documento: empDoc.trim(),
+          nombre_completo: empName.trim(),
+          turno_id: empTurnoId || null,
+          estado: empEstado,
+          datos_biometricos: null,
+        });
+      }
+      setShowEmpModal(false);
+      await loadAllData();
+    } catch (err: unknown) {
+      console.error('Error al guardar empleado:', err);
+      setEmpError(err instanceof Error ? err.message : 'Error al guardar empleado.');
+    } finally {
+      setIsSavingEmp(false);
     }
-    setShowEmpModal(false);
-    loadAllData();
   };
 
   // CRUD Turno Submit
@@ -148,23 +163,40 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
     e.preventDefault();
     if (!turnoNombre.trim()) return;
 
-    if (editingTurno) {
-      await TurnosService.update(editingTurno.id, {
-        nombre: turnoNombre.trim(),
-        hora_ingreso: `${turnoIngreso}:00`,
-        hora_salida: `${turnoSalida}:00`,
-        max_horas_extras: Number(turnoMaxExtras),
-      });
-    } else {
-      await TurnosService.create({
-        nombre: turnoNombre.trim(),
-        hora_ingreso: `${turnoIngreso}:00`,
-        hora_salida: `${turnoSalida}:00`,
-        max_horas_extras: Number(turnoMaxExtras),
-      });
+    setIsSavingTurno(true);
+    setTurnoError(null);
+
+    try {
+      const ingresoFinal = turnoIngreso.includes(':') && turnoIngreso.split(':').length === 2
+        ? `${turnoIngreso}:00`
+        : (turnoIngreso || '08:00:00');
+      const salidaFinal = turnoSalida.includes(':') && turnoSalida.split(':').length === 2
+        ? `${turnoSalida}:00`
+        : (turnoSalida || '16:00:00');
+
+      if (editingTurno) {
+        await TurnosService.update(editingTurno.id, {
+          nombre: turnoNombre.trim(),
+          hora_ingreso: ingresoFinal,
+          hora_salida: salidaFinal,
+          max_horas_extras: Number(turnoMaxExtras) || 0,
+        });
+      } else {
+        await TurnosService.create({
+          nombre: turnoNombre.trim(),
+          hora_ingreso: ingresoFinal,
+          hora_salida: salidaFinal,
+          max_horas_extras: Number(turnoMaxExtras) || 0,
+        });
+      }
+      setShowTurnoModal(false);
+      await loadAllData();
+    } catch (err: unknown) {
+      console.error('Error al guardar turno:', err);
+      setTurnoError(err instanceof Error ? err.message : 'Error al guardar el turno.');
+    } finally {
+      setIsSavingTurno(false);
     }
-    setShowTurnoModal(false);
-    loadAllData();
   };
 
   const filteredAsistencias = asistencias.filter((a) => {
@@ -707,9 +739,21 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
                   <option value="Inactivo">Inactivo</option>
                 </select>
               </div>
+              {empError && (
+                <div className="p-2.5 rounded-xl bg-status-error/15 border border-status-error/30 text-status-error text-xs font-semibold">
+                  {empError}
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowEmpModal(false)} className="px-4 py-2 rounded-xl bg-white/5 text-text-muted">Cancelar</button>
-                <button type="submit" className="px-4 py-2 rounded-xl bg-neon-green text-black font-bold">Guardar</button>
+                <button
+                  type="submit"
+                  disabled={isSavingEmp}
+                  className="px-4 py-2 rounded-xl bg-neon-green disabled:opacity-50 text-black font-bold flex items-center gap-2"
+                >
+                  {isSavingEmp ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {isSavingEmp ? 'Guardando...' : 'Guardar'}
+                </button>
               </div>
             </form>
           </div>
@@ -725,6 +769,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
               <button type="button" onClick={() => setShowTurnoModal(false)} className="text-text-muted"><X size={20} /></button>
             </div>
             <form onSubmit={handleTurnoSubmit} className="flex flex-col gap-3.5 text-xs">
+              {turnoError && (
+                <div className="p-2.5 rounded-xl bg-status-error/15 border border-status-error/30 text-status-error text-xs font-semibold">
+                  {turnoError}
+                </div>
+              )}
               <div>
                 <label className="text-text-muted block mb-1">Nombre del Turno</label>
                 <input
@@ -771,7 +820,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setShowTurnoModal(false)} className="px-4 py-2 rounded-xl bg-white/5 text-text-muted">Cancelar</button>
-                <button type="submit" className="px-4 py-2 rounded-xl bg-neon-green text-black font-bold">Guardar</button>
+                <button
+                  type="submit"
+                  disabled={isSavingTurno}
+                  className="px-4 py-2 rounded-xl bg-neon-green disabled:opacity-50 text-black font-bold flex items-center gap-2"
+                >
+                  {isSavingTurno ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {isSavingTurno ? 'Guardando...' : 'Guardar'}
+                </button>
               </div>
             </form>
           </div>

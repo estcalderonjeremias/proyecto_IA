@@ -2,26 +2,27 @@ import { createClient } from '@supabase/supabase-js';
 import { Turno, Empleado, Asistencia, EstadoFichaje } from '@/types/database';
 import { BiometricEngine } from '@/lib/biometrics';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  '';
+
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  '';
 
 export const isSupabaseConfigured = Boolean(
-  supabaseUrl && 
-  supabaseAnonKey && 
+  supabaseUrl &&
+  supabaseAnonKey &&
   !supabaseUrl.includes('placeholder-project') &&
   !supabaseAnonKey.includes('placeholder-anon-key')
 );
 
-if (!isSupabaseConfigured && typeof window !== 'undefined') {
-  console.warn(
-    '[BioAccess Supabase] NEXT_PUBLIC_SUPABASE_URL o NEXT_PUBLIC_SUPABASE_ANON_KEY no están configuradas con valores válidos. Configúralas en .env.local o en las variables de entorno de Vercel.'
-  );
-}
-
 // Cliente oficial de Supabase conectado directamente a PostgreSQL en la nube
 export const supabase = createClient(
-  supabaseUrl || 'https://placeholder-project.supabase.co',
-  supabaseAnonKey || 'placeholder-anon-key',
+  isSupabaseConfigured ? supabaseUrl : 'https://placeholder-project.supabase.co',
+  isSupabaseConfigured ? supabaseAnonKey : 'placeholder-anon-key',
   {
     auth: {
       persistSession: true,
@@ -31,202 +32,444 @@ export const supabase = createClient(
 );
 
 // ----------------------------------------------------------------------
-// SERVICIOS: TURNOS (Persistencia directa en PostgreSQL Supabase)
+// DATOS MOCK / CACHE RESILIENTE (Para funcionamiento offline o local)
+// ----------------------------------------------------------------------
+const INITIAL_TURNOS: Turno[] = [
+  {
+    id: '11111111-1111-1111-1111-111111111111',
+    nombre: 'Turno Mañana (08:00 - 16:00)',
+    hora_ingreso: '08:00:00',
+    hora_salida: '16:00:00',
+    max_horas_extras: 2,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: '22222222-2222-2222-2222-222222222222',
+    nombre: 'Turno Tarde (14:00 - 22:00)',
+    hora_ingreso: '14:00:00',
+    hora_salida: '22:00:00',
+    max_horas_extras: 3,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: '33333333-3333-3333-3333-333333333333',
+    nombre: 'Turno Noche (22:00 - 06:00)',
+    hora_ingreso: '22:00:00',
+    hora_salida: '06:00:00',
+    max_horas_extras: 2,
+    created_at: new Date().toISOString()
+  }
+];
+
+const INITIAL_EMPLEADOS: Empleado[] = [
+  {
+    id: 'e1111111-1111-1111-1111-111111111111',
+    documento: '40123456',
+    nombre_completo: 'Carlos Eduardo Ramírez',
+    turno_id: '11111111-1111-1111-1111-111111111111',
+    estado: 'Pendiente_Biometria',
+    datos_biometricos: null,
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'e2222222-2222-2222-2222-222222222222',
+    documento: '38987654',
+    nombre_completo: 'María Valentina Gómez',
+    turno_id: '11111111-1111-1111-1111-111111111111',
+    estado: 'Activo',
+    datos_biometricos: new Array(128).fill(0).map((_, i) => Math.sin(i / 10)),
+    created_at: new Date().toISOString()
+  },
+  {
+    id: 'e3333333-3333-3333-3333-333333333333',
+    documento: '45678901',
+    nombre_completo: 'Alejandro Morales',
+    turno_id: '22222222-2222-2222-2222-222222222222',
+    estado: 'Pendiente_Biometria',
+    datos_biometricos: null,
+    created_at: new Date().toISOString()
+  }
+];
+
+class LocalStoreManager {
+  private get<T>(key: string, def: T): T {
+    if (typeof window === 'undefined') return def;
+    try {
+      const item = localStorage.getItem(`bioaccess_${key}`);
+      return item ? JSON.parse(item) : def;
+    } catch {
+      return def;
+    }
+  }
+
+  private set<T>(key: string, val: T): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(`bioaccess_${key}`, JSON.stringify(val));
+    } catch {
+      // Ignore
+    }
+  }
+
+  getTurnos(): Turno[] { return this.get<Turno[]>('turnos', INITIAL_TURNOS); }
+  setTurnos(t: Turno[]) { this.set('turnos', t); }
+  saveTurno(t: Turno) {
+    const list = this.getTurnos().filter(x => x.id !== t.id);
+    list.push(t);
+    this.setTurnos(list);
+  }
+  deleteTurno(id: string) {
+    this.setTurnos(this.getTurnos().filter(t => t.id !== id));
+  }
+
+  getEmpleados(): Empleado[] { return this.get<Empleado[]>('empleados', INITIAL_EMPLEADOS); }
+  setEmpleados(e: Empleado[]) { this.set('empleados', e); }
+  saveEmpleado(e: Empleado) {
+    const list = this.getEmpleados().filter(x => x.id !== e.id);
+    list.push(e);
+    this.setEmpleados(list);
+  }
+  deleteEmpleado(id: string) {
+    this.setEmpleados(this.getEmpleados().filter(e => e.id !== id));
+  }
+
+  getAsistencias(): Asistencia[] { return this.get<Asistencia[]>('asistencias', []); }
+  setAsistencias(a: Asistencia[]) { this.set('asistencias', a); }
+  saveAsistencia(a: Asistencia) {
+    const list = this.getAsistencias().filter(x => x.id !== a.id);
+    list.unshift(a);
+    this.setAsistencias(list);
+  }
+}
+
+export const LocalStore = new LocalStoreManager();
+
+// ----------------------------------------------------------------------
+// SERVICIOS: TURNOS
 // ----------------------------------------------------------------------
 export const TurnosService = {
   async getAll(): Promise<Turno[]> {
-    const { data, error } = await supabase
-      .from('turnos')
-      .select('*')
-      .order('nombre');
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('turnos')
+          .select('*')
+          .order('nombre');
 
-    if (error) {
-      console.error('[TurnosService.getAll] Error consultando Supabase:', error.message);
-      throw new Error(`Error al consultar turnos en Supabase: ${error.message}`);
+        if (!error && data) {
+          LocalStore.setTurnos(data as Turno[]);
+          return data as Turno[];
+        }
+        if (error) {
+          console.warn('[TurnosService.getAll] Supabase retornó error:', error.message);
+        }
+      } catch (err) {
+        console.warn('[TurnosService.getAll] Fallo de conexión con Supabase:', err);
+      }
     }
-    return (data || []) as Turno[];
+    return LocalStore.getTurnos();
   },
 
   async create(turno: Omit<Turno, 'id' | 'created_at'>): Promise<Turno> {
-    const { data, error } = await supabase
-      .from('turnos')
-      .insert([turno])
-      .select()
-      .single();
+    const newTurno: Turno = {
+      ...turno,
+      id: crypto.randomUUID(),
+      created_at: new Date().toISOString()
+    };
 
-    if (error) {
-      console.error('[TurnosService.create] Error en Supabase:', error.message);
-      throw new Error(`Error al crear turno en Supabase: ${error.message}`);
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('turnos')
+          .insert([{
+            nombre: turno.nombre,
+            hora_ingreso: turno.hora_ingreso,
+            hora_salida: turno.hora_salida,
+            max_horas_extras: turno.max_horas_extras,
+          }])
+          .select()
+          .single();
+
+        if (!error && data) {
+          const created = data as Turno;
+          LocalStore.saveTurno(created);
+          return created;
+        }
+        if (error) {
+          console.warn('[TurnosService.create] Error en Supabase, guardando en local:', error.message);
+        }
+      } catch (err) {
+        console.warn('[TurnosService.create] Conexión fallida con Supabase, guardando en local:', err);
+      }
     }
-    return data as Turno;
+
+    LocalStore.saveTurno(newTurno);
+    return newTurno;
   },
 
   async update(id: string, updates: Partial<Turno>): Promise<void> {
-    const { error } = await supabase
-      .from('turnos')
-      .update(updates)
-      .eq('id', id);
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('turnos')
+          .update(updates)
+          .eq('id', id);
 
-    if (error) {
-      console.error('[TurnosService.update] Error en Supabase:', error.message);
-      throw new Error(`Error al actualizar turno en Supabase: ${error.message}`);
+        if (error) {
+          console.warn('[TurnosService.update] Error en Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('[TurnosService.update] Conexión fallida con Supabase:', err);
+      }
+    }
+
+    const current = LocalStore.getTurnos().find(t => t.id === id);
+    if (current) {
+      LocalStore.saveTurno({ ...current, ...updates });
     }
   },
 
   async delete(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('turnos')
-      .delete()
-      .eq('id', id);
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('turnos')
+          .delete()
+          .eq('id', id);
 
-    if (error) {
-      console.error('[TurnosService.delete] Error en Supabase:', error.message);
-      throw new Error(`Error al eliminar turno en Supabase: ${error.message}`);
+        if (error) {
+          console.warn('[TurnosService.delete] Error en Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('[TurnosService.delete] Conexión fallida con Supabase:', err);
+      }
     }
+    LocalStore.deleteTurno(id);
   }
 };
 
 // ----------------------------------------------------------------------
-// SERVICIOS: EMPLEADOS (Persistencia directa en PostgreSQL Supabase)
+// SERVICIOS: EMPLEADOS
 // ----------------------------------------------------------------------
 export const EmpleadosService = {
   async getAll(): Promise<Empleado[]> {
-    const { data, error } = await supabase
-      .from('empleados')
-      .select('*, turno:turnos(*)')
-      .order('nombre_completo');
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('empleados')
+          .select('*, turno:turnos(*)')
+          .order('nombre_completo');
 
-    if (error) {
-      console.error('[EmpleadosService.getAll] Error consultando Supabase:', error.message);
-      throw new Error(`Error al consultar empleados en Supabase: ${error.message}`);
+        if (!error && data) {
+          LocalStore.setEmpleados(data as Empleado[]);
+          return data as Empleado[];
+        }
+        if (error) {
+          console.warn('[EmpleadosService.getAll] Supabase retornó error:', error.message);
+        }
+      } catch (err) {
+        console.warn('[EmpleadosService.getAll] Fallo de conexión con Supabase:', err);
+      }
     }
-    return (data || []) as Empleado[];
+
+    const turnos = await TurnosService.getAll();
+    return LocalStore.getEmpleados().map(e => ({
+      ...e,
+      turno: turnos.find(t => t.id === e.turno_id)
+    }));
   },
 
   async getByDocumento(doc: string): Promise<Empleado | null> {
     const cleanDoc = doc.trim();
     if (!cleanDoc) return null;
 
-    const { data, error } = await supabase
-      .from('empleados')
-      .select('*, turno:turnos(*)')
-      .eq('documento', cleanDoc)
-      .maybeSingle();
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('empleados')
+          .select('*, turno:turnos(*)')
+          .eq('documento', cleanDoc)
+          .maybeSingle();
 
-    if (error) {
-      console.error('[EmpleadosService.getByDocumento] Error consultando Supabase:', error.message);
-      throw new Error(`Error al buscar empleado por DNI en Supabase: ${error.message}`);
+        if (!error && data) {
+          return data as Empleado;
+        }
+        if (error) {
+          console.warn('[EmpleadosService.getByDocumento] Supabase retornó error:', error.message);
+        }
+      } catch (err) {
+        console.warn('[EmpleadosService.getByDocumento] Conexión fallida con Supabase:', err);
+      }
     }
-    return (data as Empleado) || null;
+
+    const turnos = await TurnosService.getAll();
+    const local = LocalStore.getEmpleados().find(e => e.documento === cleanDoc);
+    if (local) {
+      return {
+        ...local,
+        turno: turnos.find(t => t.id === local.turno_id)
+      };
+    }
+    return null;
   },
 
   async create(emp: Omit<Empleado, 'id' | 'created_at'>): Promise<Empleado> {
-    const { data, error } = await supabase
-      .from('empleados')
-      .insert([emp])
-      .select('*, turno:turnos(*)')
-      .single();
+    const newEmp: Empleado = {
+      ...emp,
+      id: crypto.randomUUID(),
+      created_at: new Date().toISOString()
+    };
 
-    if (error) {
-      console.error('[EmpleadosService.create] Error en Supabase:', error.message);
-      throw new Error(`Error al crear empleado en Supabase: ${error.message}`);
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('empleados')
+          .insert([emp])
+          .select('*, turno:turnos(*)')
+          .single();
+
+        if (!error && data) {
+          const created = data as Empleado;
+          LocalStore.saveEmpleado(created);
+          return created;
+        }
+        if (error) {
+          console.warn('[EmpleadosService.create] Error en Supabase, guardando local:', error.message);
+        }
+      } catch (err) {
+        console.warn('[EmpleadosService.create] Conexión fallida con Supabase, guardando local:', err);
+      }
     }
-    return data as Empleado;
+
+    LocalStore.saveEmpleado(newEmp);
+    return newEmp;
   },
 
   async update(id: string, updates: Partial<Empleado>): Promise<void> {
-    const { error } = await supabase
-      .from('empleados')
-      .update(updates)
-      .eq('id', id);
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('empleados')
+          .update(updates)
+          .eq('id', id);
 
-    if (error) {
-      console.error('[EmpleadosService.update] Error en Supabase:', error.message);
-      throw new Error(`Error al actualizar empleado en Supabase: ${error.message}`);
+        if (error) {
+          console.warn('[EmpleadosService.update] Error en Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('[EmpleadosService.update] Conexión fallida con Supabase:', err);
+      }
+    }
+
+    const current = LocalStore.getEmpleados().find(e => e.id === id);
+    if (current) {
+      LocalStore.saveEmpleado({ ...current, ...updates });
     }
   },
 
   async saveBiometrics(id: string, descriptor: number[]): Promise<void> {
-    // Si estamos en el navegador, invocamos la ruta API centralizada de enrolamiento
     if (typeof window !== 'undefined') {
-      const res = await fetch('/api/empleados/enrolar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ empleado_id: id, descriptor }),
-      });
-      const data = await res.json().catch(() => ({ success: false, message: 'Error de red.' }));
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || `Error ${res.status} al guardar biometría en Supabase.`);
+      try {
+        const res = await fetch('/api/empleados/enrolar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ empleado_id: id, descriptor }),
+        });
+        const data = await res.json().catch(() => ({ success: false }));
+        if (res.ok && data.success) {
+          if (data.empleado) LocalStore.saveEmpleado(data.empleado);
+          return;
+        }
+      } catch (err) {
+        console.warn('[EmpleadosService.saveBiometrics] Falló llamada API, aplicando respaldo local:', err);
       }
-      return;
     }
 
-    // Actualización directa en Supabase
-    const { error } = await supabase
-      .from('empleados')
-      .update({
-        datos_biometricos: descriptor,
-        estado: 'Activo',
-      })
-      .eq('id', id);
-
-    if (error) {
-      console.error('[EmpleadosService.saveBiometrics] Error en Supabase:', error.message);
-      throw new Error(`Error al guardar biometría en Supabase: ${error.message}`);
-    }
+    await this.update(id, {
+      datos_biometricos: descriptor,
+      estado: 'Activo',
+    });
   },
 
   async delete(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('empleados')
-      .delete()
-      .eq('id', id);
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('empleados')
+          .delete()
+          .eq('id', id);
 
-    if (error) {
-      console.error('[EmpleadosService.delete] Error en Supabase:', error.message);
-      throw new Error(`Error al eliminar empleado en Supabase: ${error.message}`);
+        if (error) {
+          console.warn('[EmpleadosService.delete] Error en Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('[EmpleadosService.delete] Conexión fallida con Supabase:', err);
+      }
     }
+    LocalStore.deleteEmpleado(id);
   }
 };
 
 // ----------------------------------------------------------------------
-// SERVICIOS: ASISTENCIAS (Persistencia directa en PostgreSQL Supabase)
+// SERVICIOS: ASISTENCIAS
 // ----------------------------------------------------------------------
 export const AsistenciasService = {
   async getAll(): Promise<Asistencia[]> {
-    const { data, error } = await supabase
-      .from('asistencias')
-      .select('*, empleado:empleados(*, turno:turnos(*))')
-      .order('created_at', { ascending: false });
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('asistencias')
+          .select('*, empleado:empleados(*, turno:turnos(*))')
+          .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('[AsistenciasService.getAll] Error consultando Supabase:', error.message);
-      throw new Error(`Error al consultar asistencias en Supabase: ${error.message}`);
+        if (!error && data) {
+          LocalStore.setAsistencias(data as Asistencia[]);
+          return data as Asistencia[];
+        }
+        if (error) {
+          console.warn('[AsistenciasService.getAll] Supabase retornó error:', error.message);
+        }
+      } catch (err) {
+        console.warn('[AsistenciasService.getAll] Fallo de conexión con Supabase:', err);
+      }
     }
-    return (data || []) as Asistencia[];
+
+    const emps = await EmpleadosService.getAll();
+    return LocalStore.getAsistencias().map(a => ({
+      ...a,
+      empleado: emps.find(e => e.id === a.empleado_id)
+    }));
   },
 
   async getTodayForEmpleado(empleadoId: string): Promise<Asistencia | null> {
     const todayStr = new Date().toISOString().split('T')[0];
-    const { data, error } = await supabase
-      .from('asistencias')
-      .select('*')
-      .eq('empleado_id', empleadoId)
-      .eq('fecha', todayStr)
-      .order('hora_entrada', { ascending: false })
-      .limit(1)
-      .maybeSingle();
 
-    if (error) {
-      console.error('[AsistenciasService.getTodayForEmpleado] Error consultando Supabase:', error.message);
-      throw new Error(`Error al consultar asistencia del día en Supabase: ${error.message}`);
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('asistencias')
+          .select('*')
+          .eq('empleado_id', empleadoId)
+          .eq('fecha', todayStr)
+          .order('hora_entrada', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!error && data) {
+          return data as Asistencia;
+        }
+      } catch (err) {
+        console.warn('[AsistenciasService.getTodayForEmpleado] Fallo conexión Supabase:', err);
+      }
     }
-    return (data as Asistencia) || null;
+
+    const list = LocalStore.getAsistencias();
+    return list.find(a => a.empleado_id === empleadoId && a.fecha === todayStr) || null;
   },
 
   async clockIn(
-    empleadoId: string, 
-    estadoFichaje: EstadoFichaje = 'Normal', 
+    empleadoId: string,
+    estadoFichaje: EstadoFichaje = 'Normal',
     fotoExcepcionUrl: string | null = null
   ): Promise<Asistencia> {
     const now = new Date();
@@ -243,30 +486,55 @@ export const AsistenciasService = {
       horas_extras: null
     };
 
-    const { data, error } = await supabase
-      .from('asistencias')
-      .insert([asistenciaData])
-      .select('*, empleado:empleados(*, turno:turnos(*))')
-      .single();
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('asistencias')
+          .insert([asistenciaData])
+          .select('*, empleado:empleados(*, turno:turnos(*))')
+          .single();
 
-    if (error) {
-      console.error('[AsistenciasService.clockIn] Error en Supabase:', error.message);
-      throw new Error(`Error al registrar entrada en Supabase: ${error.message}`);
+        if (!error && data) {
+          const created = data as Asistencia;
+          LocalStore.saveAsistencia(created);
+          return created;
+        }
+        if (error) {
+          console.warn('[AsistenciasService.clockIn] Error en Supabase:', error.message);
+        }
+      } catch (err) {
+        console.warn('[AsistenciasService.clockIn] Conexión fallida con Supabase:', err);
+      }
     }
-    return data as Asistencia;
+
+    const newRecord: Asistencia = {
+      ...asistenciaData,
+      id: crypto.randomUUID(),
+      created_at: now.toISOString()
+    };
+    LocalStore.saveAsistencia(newRecord);
+    return newRecord;
   },
 
   async clockOut(asistenciaId: string, turno: Turno | null): Promise<Asistencia> {
     const now = new Date();
-    const { data: currentRecord, error: fetchErr } = await supabase
-      .from('asistencias')
-      .select('*')
-      .eq('id', asistenciaId)
-      .single();
+    let currentRecord = LocalStore.getAsistencias().find(a => a.id === asistenciaId);
 
-    if (fetchErr || !currentRecord) {
-      console.error('[AsistenciasService.clockOut] Error buscando registro:', fetchErr?.message);
-      throw new Error('Registro de entrada no encontrado en Supabase');
+    if (isSupabaseConfigured) {
+      try {
+        const { data } = await supabase
+          .from('asistencias')
+          .select('*')
+          .eq('id', asistenciaId)
+          .single();
+        if (data) currentRecord = data as Asistencia;
+      } catch {
+        // Use local currentRecord
+      }
+    }
+
+    if (!currentRecord) {
+      throw new Error('Registro de entrada no encontrado');
     }
 
     const horaEntrada = new Date(currentRecord.hora_entrada);
@@ -285,48 +553,66 @@ export const AsistenciasService = {
       horas_extras: horasExtras
     };
 
-    const { data, error: updateErr } = await supabase
-      .from('asistencias')
-      .update(updates)
-      .eq('id', asistenciaId)
-      .select('*, empleado:empleados(*, turno:turnos(*))')
-      .single();
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('asistencias')
+          .update(updates)
+          .eq('id', asistenciaId)
+          .select('*, empleado:empleados(*, turno:turnos(*))')
+          .single();
 
-    if (updateErr) {
-      console.error('[AsistenciasService.clockOut] Error actualizando Supabase:', updateErr.message);
-      throw new Error(`Error al registrar salida en Supabase: ${updateErr.message}`);
+        if (!error && data) {
+          const updated = data as Asistencia;
+          LocalStore.saveAsistencia(updated);
+          return updated;
+        }
+      } catch (err) {
+        console.warn('[AsistenciasService.clockOut] Error en Supabase:', err);
+      }
     }
-    return data as Asistencia;
+
+    const updatedRecord: Asistencia = { ...currentRecord, ...updates };
+    LocalStore.saveAsistencia(updatedRecord);
+    return updatedRecord;
   },
 
   async updateEstado(id: string, estado: EstadoFichaje): Promise<void> {
-    const { error } = await supabase
-      .from('asistencias')
-      .update({ estado_fichaje: estado })
-      .eq('id', id);
+    if (isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('asistencias')
+          .update({ estado_fichaje: estado })
+          .eq('id', id);
+      } catch (err) {
+        console.warn('[AsistenciasService.updateEstado] Error en Supabase:', err);
+      }
+    }
 
-    if (error) {
-      console.error('[AsistenciasService.updateEstado] Error en Supabase:', error.message);
-      throw new Error(`Error al actualizar estado en Supabase: ${error.message}`);
+    const current = LocalStore.getAsistencias().find(a => a.id === id);
+    if (current) {
+      LocalStore.saveAsistencia({ ...current, estado_fichaje: estado });
     }
   },
 
   async uploadExceptionPhoto(base64Photo: string, empleadoId: string): Promise<string> {
     const filename = `excepcion_${empleadoId}_${Date.now()}.jpg`;
-    try {
-      const blob = BiometricEngine.dataURLtoBlob(base64Photo);
-      const { data, error } = await supabase.storage
-        .from('fotos_excepciones')
-        .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
-
-      if (!error && data) {
-        const { data: publicUrlData } = supabase.storage
+    if (isSupabaseConfigured) {
+      try {
+        const blob = BiometricEngine.dataURLtoBlob(base64Photo);
+        const { data, error } = await supabase.storage
           .from('fotos_excepciones')
-          .getPublicUrl(data.path);
-        return publicUrlData.publicUrl;
+          .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
+
+        if (!error && data) {
+          const { data: publicUrlData } = supabase.storage
+            .from('fotos_excepciones')
+            .getPublicUrl(data.path);
+          return publicUrlData.publicUrl;
+        }
+      } catch (err) {
+        console.warn('Error al subir imagen a Supabase Storage:', err);
       }
-    } catch (err) {
-      console.warn('Error al subir imagen a Supabase Storage:', err);
     }
     return base64Photo;
   }

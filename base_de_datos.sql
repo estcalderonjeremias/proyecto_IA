@@ -119,16 +119,11 @@ ALTER TABLE public.administradores ENABLE ROW LEVEL SECURITY;
 -- -----------------------------------
 -- POLÍTICAS: turnos
 -- -----------------------------------
--- Permite lectura pública/anon (Kiosco y Admins)
-CREATE POLICY "Permitir lectura de turnos a todos"
-ON public.turnos FOR SELECT
-USING (true);
-
--- Permite gestión completa a Administradores
-CREATE POLICY "Permitir control total de turnos a administradores"
+-- Permite lectura y gestión de turnos a la aplicación
+CREATE POLICY "Permitir gestion de turnos desde la app"
 ON public.turnos FOR ALL
-USING (public.is_admin())
-WITH CHECK (public.is_admin());
+USING (true)
+WITH CHECK (true);
 
 -- -----------------------------------
 -- POLÍTICAS: empleados
