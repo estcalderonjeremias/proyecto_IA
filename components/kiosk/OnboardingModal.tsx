@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Empleado } from '@/types/database';
 import { sounds } from '@/lib/sound';
+import { isSupabaseConfigured, LocalStore } from '@/lib/supabaseClient';
 import {
   CheckCircle2,
   UserCheck,
@@ -134,36 +135,49 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
       if (snapshot) setPreviewPhoto(snapshot);
 
-      // ── Paso 3: Persistir en Supabase ──
+      // ── Paso 3: Persistir (Supabase o local) ──
       setStep('saving');
 
-      const enrollRes = await fetch('/api/empleados/enrolar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          empleado_id: empleado.id,
-          documento: empleado.documento,
-          nombre_completo: empleado.nombre_completo,
-          turno_id: empleado.turno_id,
-          descriptor,
-        }),
-      });
-
-      const enrollData = await enrollRes.json().catch(() => ({ success: false, message: 'Error al leer la respuesta del servidor.' }));
-
-      if (!enrollRes.ok || !enrollData.success) {
-        throw new Error(
-          enrollData.message || `Error del servidor (${enrollRes.status}) al guardar la biometría.`
-        );
-      }
-
-      // ── Paso 4: Éxito ──
-      const updated: Empleado = enrollData.empleado || {
+      // El objeto actualizado con biometría y estado Activo
+      const updated: Empleado = {
         ...empleado,
-        estado: 'Activo',
         datos_biometricos: descriptor,
+        estado: 'Activo',
       };
 
+      if (isSupabaseConfigured) {
+        // Con Supabase real: llamar a la API route en el servidor
+        const enrollRes = await fetch('/api/empleados/enrolar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            empleado_id: empleado.id,
+            documento: empleado.documento,
+            nombre_completo: empleado.nombre_completo,
+            turno_id: empleado.turno_id,
+            descriptor,
+          }),
+        });
+
+        const enrollData = await enrollRes.json().catch(() => ({ success: false, message: 'Error al leer la respuesta del servidor.' }));
+
+        if (!enrollRes.ok || !enrollData.success) {
+          throw new Error(
+            enrollData.message || `Error del servidor (${enrollRes.status}) al guardar la biometría.`
+          );
+        }
+
+        // Usar el empleado devuelto por Supabase pero preservar el ID original
+        if (enrollData.empleado) {
+          Object.assign(updated, enrollData.empleado, { id: empleado.id });
+        }
+      }
+
+      // Siempre actualizar el LocalStore del cliente con el empleado original
+      // (en modo local esto es la única persistencia; en modo Supabase es el cache local)
+      LocalStore.saveEmpleado(updated);
+
+      // ── Paso 4: Éxito ──
       setEnrolledEmpleado(updated);
       sounds.playSuccess();
       confetti({ particleCount: 80, spread: 70, origin: { y: 0.55 } });
