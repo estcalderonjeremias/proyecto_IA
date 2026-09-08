@@ -149,6 +149,7 @@ export const LocalStore = new LocalStoreManager();
 // ----------------------------------------------------------------------
 export const TurnosService = {
   async getAll(): Promise<Turno[]> {
+    const localTurnos = LocalStore.getTurnos();
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
@@ -157,8 +158,12 @@ export const TurnosService = {
           .order('nombre');
 
         if (!error && data) {
-          LocalStore.setTurnos(data as Turno[]);
-          return data as Turno[];
+          const supabaseList = data as Turno[];
+          const supabaseIds = new Set(supabaseList.map(t => t.id));
+          const localOnly = localTurnos.filter(t => !supabaseIds.has(t.id));
+          const merged = [...supabaseList, ...localOnly];
+          LocalStore.setTurnos(merged);
+          return merged;
         }
         if (error) {
           console.warn('[TurnosService.getAll] Supabase retornó error:', error.message);
@@ -167,7 +172,7 @@ export const TurnosService = {
         console.warn('[TurnosService.getAll] Fallo de conexión con Supabase:', err);
       }
     }
-    return LocalStore.getTurnos();
+    return localTurnos;
   },
 
   async create(turno: Omit<Turno, 'id' | 'created_at'>): Promise<Turno> {
@@ -177,11 +182,15 @@ export const TurnosService = {
       created_at: new Date().toISOString()
     };
 
+    // Guardado inmediato en el almacén local
+    LocalStore.saveTurno(newTurno);
+
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
           .from('turnos')
           .insert([{
+            id: newTurno.id,
             nombre: turno.nombre,
             hora_ingreso: turno.hora_ingreso,
             hora_salida: turno.hora_salida,
@@ -196,18 +205,22 @@ export const TurnosService = {
           return created;
         }
         if (error) {
-          console.warn('[TurnosService.create] Error en Supabase, guardando en local:', error.message);
+          console.warn('[TurnosService.create] Supabase devolvió error (posible política RLS):', error.message);
         }
       } catch (err) {
-        console.warn('[TurnosService.create] Conexión fallida con Supabase, guardando en local:', err);
+        console.warn('[TurnosService.create] Error de conexión con Supabase:', err);
       }
     }
 
-    LocalStore.saveTurno(newTurno);
     return newTurno;
   },
 
   async update(id: string, updates: Partial<Turno>): Promise<void> {
+    const current = LocalStore.getTurnos().find(t => t.id === id);
+    if (current) {
+      LocalStore.saveTurno({ ...current, ...updates });
+    }
+
     if (isSupabaseConfigured) {
       try {
         const { error } = await supabase
@@ -222,14 +235,11 @@ export const TurnosService = {
         console.warn('[TurnosService.update] Conexión fallida con Supabase:', err);
       }
     }
-
-    const current = LocalStore.getTurnos().find(t => t.id === id);
-    if (current) {
-      LocalStore.saveTurno({ ...current, ...updates });
-    }
   },
 
   async delete(id: string): Promise<void> {
+    LocalStore.deleteTurno(id);
+
     if (isSupabaseConfigured) {
       try {
         const { error } = await supabase
@@ -244,7 +254,6 @@ export const TurnosService = {
         console.warn('[TurnosService.delete] Conexión fallida con Supabase:', err);
       }
     }
-    LocalStore.deleteTurno(id);
   }
 };
 
@@ -253,6 +262,9 @@ export const TurnosService = {
 // ----------------------------------------------------------------------
 export const EmpleadosService = {
   async getAll(): Promise<Empleado[]> {
+    const localEmpleados = LocalStore.getEmpleados();
+    const turnos = await TurnosService.getAll();
+
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
@@ -261,8 +273,12 @@ export const EmpleadosService = {
           .order('nombre_completo');
 
         if (!error && data) {
-          LocalStore.setEmpleados(data as Empleado[]);
-          return data as Empleado[];
+          const supabaseList = data as Empleado[];
+          const supabaseIds = new Set(supabaseList.map(e => e.id));
+          const localOnly = localEmpleados.filter(e => !supabaseIds.has(e.id));
+          const merged = [...supabaseList, ...localOnly];
+          LocalStore.setEmpleados(merged);
+          return merged;
         }
         if (error) {
           console.warn('[EmpleadosService.getAll] Supabase retornó error:', error.message);
@@ -272,8 +288,7 @@ export const EmpleadosService = {
       }
     }
 
-    const turnos = await TurnosService.getAll();
-    return LocalStore.getEmpleados().map(e => ({
+    return localEmpleados.map(e => ({
       ...e,
       turno: turnos.find(t => t.id === e.turno_id)
     }));
@@ -320,11 +335,20 @@ export const EmpleadosService = {
       created_at: new Date().toISOString()
     };
 
+    LocalStore.saveEmpleado(newEmp);
+
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
           .from('empleados')
-          .insert([emp])
+          .insert([{
+            id: newEmp.id,
+            documento: emp.documento,
+            nombre_completo: emp.nombre_completo,
+            turno_id: emp.turno_id,
+            estado: emp.estado,
+            datos_biometricos: emp.datos_biometricos,
+          }])
           .select('*, turno:turnos(*)')
           .single();
 
@@ -341,7 +365,6 @@ export const EmpleadosService = {
       }
     }
 
-    LocalStore.saveEmpleado(newEmp);
     return newEmp;
   },
 

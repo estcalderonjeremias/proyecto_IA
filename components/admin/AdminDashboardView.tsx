@@ -66,15 +66,20 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
 
   const loadAllData = async () => {
     setLoading(true);
-    const [asistData, empData, turnoData] = await Promise.all([
-      AsistenciasService.getAll(),
-      EmpleadosService.getAll(),
-      TurnosService.getAll(),
-    ]);
-    setAsistencias(asistData);
-    setEmpleados(empData);
-    setTurnos(turnoData);
-    setLoading(false);
+    try {
+      const [asistData, empData, turnoData] = await Promise.all([
+        AsistenciasService.getAll(),
+        EmpleadosService.getAll(),
+        TurnosService.getAll(),
+      ]);
+      setAsistencias(asistData);
+      setEmpleados(empData);
+      setTurnos(turnoData);
+    } catch (err) {
+      console.warn('[AdminDashboard] Error cargando datos:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -161,39 +166,56 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
   // CRUD Turno Submit
   const handleTurnoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!turnoNombre.trim()) return;
+    const nombreTrim = turnoNombre.trim();
+    if (!nombreTrim) return;
 
     setIsSavingTurno(true);
     setTurnoError(null);
 
     try {
-      const ingresoFinal = turnoIngreso.includes(':') && turnoIngreso.split(':').length === 2
-        ? `${turnoIngreso}:00`
-        : (turnoIngreso || '08:00:00');
-      const salidaFinal = turnoSalida.includes(':') && turnoSalida.split(':').length === 2
-        ? `${turnoSalida}:00`
-        : (turnoSalida || '16:00:00');
+      // Normalizar horas: si el input retorna "08:00" lo convertimos a "08:00:00"
+      const ingresoFinal = turnoIngreso
+        ? (turnoIngreso.split(':').length === 2 ? `${turnoIngreso}:00` : turnoIngreso)
+        : '08:00:00';
+      const salidaFinal = turnoSalida
+        ? (turnoSalida.split(':').length === 2 ? `${turnoSalida}:00` : turnoSalida)
+        : '16:00:00';
 
+      let updatedTurno: Turno;
       if (editingTurno) {
         await TurnosService.update(editingTurno.id, {
-          nombre: turnoNombre.trim(),
+          nombre: nombreTrim,
           hora_ingreso: ingresoFinal,
           hora_salida: salidaFinal,
           max_horas_extras: Number(turnoMaxExtras) || 0,
         });
+        updatedTurno = {
+          ...editingTurno,
+          nombre: nombreTrim,
+          hora_ingreso: ingresoFinal,
+          hora_salida: salidaFinal,
+          max_horas_extras: Number(turnoMaxExtras) || 0,
+        };
+        setTurnos(prev => prev.map(t => t.id === updatedTurno.id ? updatedTurno : t));
       } else {
-        await TurnosService.create({
-          nombre: turnoNombre.trim(),
+        updatedTurno = await TurnosService.create({
+          nombre: nombreTrim,
           hora_ingreso: ingresoFinal,
           hora_salida: salidaFinal,
           max_horas_extras: Number(turnoMaxExtras) || 0,
         });
+        setTurnos(prev => [...prev, updatedTurno]);
       }
+
+      // Cerrar modal inmediatamente
       setShowTurnoModal(false);
-      await loadAllData();
+      setEditingTurno(null);
+
+      // Refrescar datos en segundo plano
+      loadAllData().catch(err => console.warn('[handleTurnoSubmit] Error recargando datos:', err));
     } catch (err: unknown) {
       console.error('Error al guardar turno:', err);
-      setTurnoError(err instanceof Error ? err.message : 'Error al guardar el turno.');
+      setTurnoError(err instanceof Error ? err.message : 'Error al guardar el turno. Intente nuevamente.');
     } finally {
       setIsSavingTurno(false);
     }
