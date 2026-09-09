@@ -1,4 +1,4 @@
-export type EstadoEmpleado = 'Activo' | 'Inactivo' | 'Pendiente_Biometria';
+export type EstadoEmpleado = 'Activo' | 'Inactivo' | 'Pendiente_Biometria' | 'pendiente de enrolamiento' | 'activo' | string;
 export type EstadoFichaje = 'Normal' | 'Requiere_Aprobacion' | 'Rechazado';
 export type TipoMarcacion = 'ENTRADA' | 'SALIDA';
 
@@ -17,6 +17,7 @@ export interface Empleado {
   nombre_completo: string;
   turno_id: string | null;
   estado: EstadoEmpleado;
+  estado_biometrico?: string | null;
   datos_biometricos: number[] | string | null;
   created_at?: string;
   turno?: Turno;

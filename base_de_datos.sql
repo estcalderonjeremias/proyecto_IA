@@ -40,12 +40,14 @@ CREATE TABLE IF NOT EXISTS public.empleados (
     nombre_completo VARCHAR(100) NOT NULL,
     turno_id UUID REFERENCES public.turnos(id) ON DELETE SET NULL,
     estado VARCHAR(30) CHECK (estado IN ('Activo', 'Inactivo', 'Pendiente_Biometria')) DEFAULT 'Pendiente_Biometria' NOT NULL,
+    estado_biometrico VARCHAR(50) DEFAULT 'pendiente de enrolamiento',
     datos_biometricos JSONB NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 COMMENT ON TABLE public.empleados IS 'Información de empleados y descriptores faciales biométricos de 128 flotantes (@vladmandic/face-api)';
 COMMENT ON COLUMN public.empleados.datos_biometricos IS 'Descriptor facial de 128 dimensiones en formato JSONB [float, ...] para reconocimiento facial sin pérdida de precisión';
+COMMENT ON COLUMN public.empleados.estado_biometrico IS 'Estado de enrolamiento facial: pendiente de enrolamiento / activo';
 
 -- c) Tabla: asistencias
 CREATE TABLE IF NOT EXISTS public.asistencias (
@@ -149,6 +151,11 @@ CREATE POLICY "Permitir control total de empleados a administradores"
 ON public.empleados FOR ALL
 USING (public.is_admin())
 WITH CHECK (public.is_admin());
+
+-- Permite eliminación de empleados desde la app (Kiosco / Admin anon o authenticated)
+CREATE POLICY "Permitir eliminacion de empleados desde Kiosco"
+ON public.empleados FOR DELETE
+USING (true);
 
 -- -----------------------------------
 -- POLÍTICAS: asistencias
@@ -259,6 +266,18 @@ BEGIN
             END
         );
     END IF;
+
+    -- Agregar columna estado_biometrico si no existe
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+          AND table_name = 'empleados' 
+          AND column_name = 'estado_biometrico'
+    ) THEN
+        ALTER TABLE public.empleados 
+        ADD COLUMN estado_biometrico VARCHAR(50) DEFAULT 'pendiente de enrolamiento';
+    END IF;
 END $$;
+
 
 

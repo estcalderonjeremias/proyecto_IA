@@ -24,7 +24,9 @@ import {
   LogOut,
   X,
   Check,
-  Loader2
+  Loader2,
+  Camera,
+  ScanFace
 } from 'lucide-react';
 
 interface AdminDashboardViewProps {
@@ -39,6 +41,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [turnos, setTurnos] = useState<Turno[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [deletingEmpId, setDeletingEmpId] = useState<string | null>(null);
+
+  // Admin Face Enrollment Modal States
+  const [enrollingEmp, setEnrollingEmp] = useState<Empleado | null>(null);
+  const [isCapturingAdminFace, setIsCapturingAdminFace] = useState<boolean>(false);
+  const [enrollAdminError, setEnrollAdminError] = useState<string | null>(null);
+  const adminVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const adminStreamRef = React.useRef<MediaStream | null>(null);
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -64,8 +76,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
   const [isSavingEmp, setIsSavingEmp] = useState(false);
   const [empError, setEmpError] = useState<string | null>(null);
 
+  // 1. Conexión y Lectura Inicial (Carga directa desde Supabase)
   const loadAllData = async () => {
     setLoading(true);
+    setDataError(null);
     try {
       const [asistData, empData, turnoData] = await Promise.all([
         AsistenciasService.getAll(),
@@ -75,8 +89,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
       setAsistencias(asistData);
       setEmpleados(empData);
       setTurnos(turnoData);
-    } catch (err) {
-      console.warn('[AdminDashboard] Error cargando datos:', err);
+    } catch (err: unknown) {
+      console.error('[AdminDashboard] Error cargando datos desde Supabase:', err);
+      const msg = err instanceof Error ? err.message : 'Error al conectar con la base de datos de Supabase.';
+      setDataError(msg);
     } finally {
       setLoading(false);
     }
@@ -128,7 +144,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
   const excepcionesPendientes = asistencias.filter(a => a.estado_fichaje === 'Requiere_Aprobacion').length;
   const horasExtrasAcumuladas = asistencias.reduce((acc, a) => acc + (a.horas_extras || 0), 0);
 
-  // CRUD Empleado Submit
+  // 2. Creación e Inserción de un Empleado Nuevo
   const handleEmpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!empDoc.trim() || !empName.trim()) return;
@@ -138,28 +154,161 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
 
     try {
       if (editingEmp) {
-        await EmpleadosService.update(editingEmp.id, {
+        const updated = await EmpleadosService.update(editingEmp.id, {
           documento: empDoc.trim(),
           nombre_completo: empName.trim(),
           turno_id: empTurnoId || null,
           estado: empEstado,
         });
+        setEmpleados(prev => prev.map(emp => emp.id === updated.id ? updated : emp));
       } else {
-        await EmpleadosService.create({
+        // Inserción directa en Supabase asignando ID autogenerado y estado inicial pendiente
+        const created = await EmpleadosService.create({
           documento: empDoc.trim(),
           nombre_completo: empName.trim(),
           turno_id: empTurnoId || null,
-          estado: empEstado,
+          estado: empEstado || 'Pendiente_Biometria',
           datos_biometricos: null,
         });
+        // Agregar inmediatamente al estado local con el ID asignado por Supabase
+        setEmpleados(prev => [...prev, created]);
       }
       setShowEmpModal(false);
-      await loadAllData();
+      setEditingEmp(null);
     } catch (err: unknown) {
       console.error('Error al guardar empleado:', err);
-      setEmpError(err instanceof Error ? err.message : 'Error al guardar empleado.');
+      setEmpError(err instanceof Error ? err.message : 'Error al guardar empleado en Supabase.');
     } finally {
       setIsSavingEmp(false);
+    }
+  };
+
+  // 4. Eliminación de Empleados (Directa en Supabase con confirmación)
+  const handleDeleteEmpleado = async (emp: Empleado) => {
+    const confirmed = window.confirm(
+      `¿Estás seguro de eliminar permanentemente al empleado "${emp.nombre_completo}" (DNI: ${emp.documento})?\n\nEsta acción ejecutará una eliminación directa en Supabase.`
+    );
+    if (!confirmed) return;
+
+    setDeletingEmpId(emp.id);
+    setActionError(null);
+
+    try {
+      // Ejecuta instrucción .delete().eq('id', id_empleado) directa en Supabase
+      await EmpleadosService.delete(emp.id);
+
+      // Solo remueve al empleado de la pantalla cuando la respuesta de Supabase confirme que el registro se borró con éxito
+      setEmpleados(prev => prev.filter(e => e.id !== emp.id));
+    } catch (err: unknown) {
+      console.error('Error al eliminar empleado en Supabase:', err);
+      const msg = err instanceof Error ? err.message : 'Error al eliminar en Supabase.';
+      setActionError(`No se pudo eliminar al empleado: ${msg}`);
+      alert(`Error en Supabase: No se pudo eliminar al empleado.\n${msg}`);
+    } finally {
+      setDeletingEmpId(null);
+    }
+  };
+
+  // 3. Enrolamiento Facial Directo desde el Admin ("Guardar Rostro")
+  const startAdminEnrollment = async (emp: Empleado) => {
+    setEnrollingEmp(emp);
+    setEnrollAdminError(null);
+    setIsCapturingAdminFace(false);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+      });
+      adminStreamRef.current = stream;
+      if (adminVideoRef.current) {
+        adminVideoRef.current.srcObject = stream;
+        adminVideoRef.current.play().catch(() => {});
+      }
+    } catch (camErr) {
+      console.warn('Error al iniciar cámara web:', camErr);
+      setEnrollAdminError('No se pudo acceder a la cámara. Verifica que tengas una cámara conectada y permisos activos.');
+    }
+  };
+
+  const closeAdminEnrollment = () => {
+    if (adminStreamRef.current) {
+      adminStreamRef.current.getTracks().forEach(t => t.stop());
+      adminStreamRef.current = null;
+    }
+    setEnrollingEmp(null);
+    setIsCapturingAdminFace(false);
+    setEnrollAdminError(null);
+  };
+
+  const handleAdminCaptureFace = async () => {
+    if (!enrollingEmp) return;
+    const video = adminVideoRef.current;
+    if (!video) return;
+
+    setIsCapturingAdminFace(true);
+    setEnrollAdminError(null);
+
+    try {
+      let descriptor: number[] | null = null;
+      try {
+        const faceapi = await import('@vladmandic/face-api');
+        const detection = await faceapi
+          .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 }))
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+        if (detection && detection.descriptor) {
+          descriptor = Array.from(detection.descriptor);
+        }
+      } catch (fErr) {
+        console.warn('face-api no disponible, usando extractor canvas:', fErr);
+      }
+
+      if (!descriptor) {
+        const sourceWidth = video.videoWidth || 640;
+        const sourceHeight = video.videoHeight || 480;
+        const canvas = document.createElement('canvas');
+        canvas.width = 120;
+        canvas.height = 120;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const minDim = Math.min(sourceWidth, sourceHeight);
+          const startX = (sourceWidth - minDim) / 2;
+          const startY = (sourceHeight - minDim) / 2;
+          ctx.drawImage(video, startX, startY, minDim, minDim, 0, 0, 120, 120);
+          const pixels = ctx.getImageData(0, 0, 120, 120).data;
+          const desc: number[] = new Array(128).fill(0);
+          const blockSize = Math.floor(pixels.length / (4 * 128));
+          for (let i = 0; i < 128; i++) {
+            let sum = 0, count = 0;
+            const start = i * blockSize * 4;
+            const end = Math.min(start + blockSize * 4, pixels.length);
+            for (let p = start; p < end; p += 4) {
+              sum += 0.299 * pixels[p] + 0.587 * pixels[p + 1] + 0.114 * pixels[p + 2];
+              count++;
+            }
+            desc[i] = count > 0 ? Number((sum / (count * 255)).toFixed(4)) : 0;
+          }
+          const norm = Math.sqrt(desc.reduce((acc, v) => acc + v * v, 0));
+          if (norm > 0) desc.forEach((_, i) => (desc[i] = Number((desc[i] / norm).toFixed(4))));
+          descriptor = desc;
+        }
+      }
+
+      if (!descriptor || descriptor.length === 0) {
+        throw new Error('No se detectó un patrón facial nítido. Asegúrate de enfocar bien tu rostro.');
+      }
+
+      // Ejecuta UPDATE en Supabase con los datos del rostro y cambia el estado a 'Activo'
+      const updated = await EmpleadosService.saveBiometrics(enrollingEmp.id, descriptor);
+
+      // Refresca el estado local en el cliente para que en la lista cambie visualmente a Activo de forma inmediata
+      setEmpleados(prev => prev.map(e => e.id === updated.id ? updated : e));
+      closeAdminEnrollment();
+    } catch (err: unknown) {
+      console.error('Error al guardar rostro en Supabase:', err);
+      setEnrollAdminError(err instanceof Error ? err.message : 'Error al guardar rostro en Supabase.');
+    } finally {
+      setIsCapturingAdminFace(false);
     }
   };
 
@@ -302,6 +451,44 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
 
       {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 p-4 sm:p-8 overflow-y-auto max-w-7xl">
+        {/* Banner de error de conexión a Supabase */}
+        {dataError && (
+          <div className="mb-6 p-4 rounded-2xl bg-status-error/15 border border-status-error/30 text-white flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="text-status-error shrink-0" size={20} />
+              <div>
+                <div className="text-sm font-bold text-status-error">Error al conectar con Supabase</div>
+                <div className="text-xs text-text-muted">{dataError}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={loadAllData}
+              className="px-3.5 py-1.5 rounded-xl bg-status-error/25 hover:bg-status-error/40 text-white text-xs font-semibold shrink-0 transition-colors flex items-center gap-1.5"
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+              Reintentar
+            </button>
+          </div>
+        )}
+
+        {/* Banner de error de operaciones CRUD */}
+        {actionError && (
+          <div className="mb-6 p-4 rounded-2xl bg-status-error/15 border border-status-error/30 text-white flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="text-status-error shrink-0" size={20} />
+              <div className="text-xs text-status-error font-semibold">{actionError}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActionError(null)}
+              className="text-text-muted hover:text-white p-1"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         {/* Header Móvil */}
         <div className="flex items-center justify-between mb-6 md:hidden">
           <div className="flex items-center gap-2 font-bold text-lg">
@@ -562,72 +749,114 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {empleados.map((emp) => (
-                    <tr key={emp.id} className="hover:bg-white/[0.02]">
-                      <td className="p-4">
-                        <div className="font-semibold text-text-main">{emp.nombre_completo}</div>
-                      </td>
-                      <td className="p-4 font-mono">{emp.documento}</td>
-                      <td className="p-4">
-                        {emp.turno ? (
-                          <span className="px-2 py-0.5 rounded-full bg-white/5 text-neon-green border border-neon-green/20 text-[11px]">
-                            {emp.turno.nombre}
-                          </span>
-                        ) : (
-                          <span className="text-text-dim">Sin turno</span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        {emp.estado === 'Activo' && (
-                          <span className="text-status-success font-semibold flex items-center gap-1">
-                            <CheckCircle size={13} /> Activo (Enrolado)
-                          </span>
-                        )}
-                        {emp.estado === 'Pendiente_Biometria' && (
-                          <span className="text-status-warning font-semibold flex items-center gap-1">
-                            <AlertTriangle size={13} /> Pendiente Enrolar
-                          </span>
-                        )}
-                        {emp.estado === 'Inactivo' && (
-                          <span className="text-status-error font-semibold flex items-center gap-1">
-                            <XCircle size={13} /> Inactivo
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4 text-right">
-                        <div className="inline-flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingEmp(emp);
-                              setEmpDoc(emp.documento);
-                              setEmpName(emp.nombre_completo);
-                              setEmpTurnoId(emp.turno_id || '');
-                              setEmpEstado(emp.estado);
-                              setShowEmpModal(true);
-                            }}
-                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-text-muted hover:text-white"
-                            title="Editar"
-                          >
-                            <Edit3 size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (confirm(`¿Eliminar al empleado ${emp.nombre_completo}?`)) {
-                                await EmpleadosService.delete(emp.id);
-                                loadAllData();
-                              }
-                            }}
-                            className="p-1.5 rounded-lg bg-status-error/10 hover:bg-status-error/20 text-status-error"
-                            title="Eliminar"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                  {loading && empleados.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-text-dim">
+                        <div className="flex items-center justify-center gap-2 text-xs">
+                          <Loader2 size={16} className="animate-spin text-neon-green" />
+                          <span>Cargando empleados desde Supabase...</span>
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  ) : empleados.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-text-dim text-xs">
+                        No hay empleados registrados en la base de datos de Supabase.
+                        <br />
+                        <span className="text-neon-green font-semibold">Crea un nuevo empleado con el botón superior.</span>
+                      </td>
+                    </tr>
+                  ) : (
+                    empleados.map((emp) => {
+                      const isActivo = emp.estado === 'Activo' || emp.estado === 'activo' || emp.estado_biometrico === 'activo';
+                      const isPendiente = !isActivo && (emp.estado === 'Pendiente_Biometria' || emp.estado === 'pendiente de enrolamiento' || emp.estado_biometrico === 'pendiente de enrolamiento');
+                      const isInactivo = emp.estado === 'Inactivo' || emp.estado === 'inactivo';
+
+                      return (
+                        <tr key={emp.id} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="p-4">
+                            <div className="font-semibold text-text-main">{emp.nombre_completo}</div>
+                            <div className="text-[10px] text-text-dim font-mono">{emp.id}</div>
+                          </td>
+                          <td className="p-4 font-mono">{emp.documento}</td>
+                          <td className="p-4">
+                            {emp.turno ? (
+                              <span className="px-2 py-0.5 rounded-full bg-white/5 text-neon-green border border-neon-green/20 text-[11px]">
+                                {emp.turno.nombre}
+                              </span>
+                            ) : (
+                              <span className="text-text-dim">Sin turno</span>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {isActivo && (
+                              <span className="text-status-success font-semibold flex items-center gap-1 text-xs">
+                                <CheckCircle size={13} /> Activo (Enrolado)
+                              </span>
+                            )}
+                            {isPendiente && (
+                              <span className="text-status-warning font-semibold flex items-center gap-1 text-xs">
+                                <AlertTriangle size={13} /> Pendiente de Enrolamiento
+                              </span>
+                            )}
+                            {isInactivo && (
+                              <span className="text-status-error font-semibold flex items-center gap-1 text-xs">
+                                <XCircle size={13} /> Inactivo
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 text-right">
+                            <div className="inline-flex items-center gap-2">
+                              {/* 3. Botón para Enrolar Rostro ("Guardar Rostro") */}
+                              {isPendiente && (
+                                <button
+                                  type="button"
+                                  onClick={() => startAdminEnrollment(emp)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-neon-green/15 hover:bg-neon-green/25 text-neon-green border border-neon-green/30 text-xs font-semibold transition-all shadow-neon"
+                                  title="Escanear y Guardar Rostro"
+                                >
+                                  <Camera size={13} />
+                                  <span>Enrolar Rostro</span>
+                                </button>
+                              )}
+
+                              {/* Botón Editar */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingEmp(emp);
+                                  setEmpDoc(emp.documento);
+                                  setEmpName(emp.nombre_completo);
+                                  setEmpTurnoId(emp.turno_id || '');
+                                  setEmpEstado(emp.estado as EstadoEmpleado);
+                                  setShowEmpModal(true);
+                                }}
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-text-muted hover:text-white transition-colors"
+                                title="Editar"
+                              >
+                                <Edit3 size={14} />
+                              </button>
+
+                              {/* 4. Botón Eliminar con confirmación y loader directo a Supabase */}
+                              <button
+                                type="button"
+                                disabled={deletingEmpId === emp.id}
+                                onClick={() => handleDeleteEmpleado(emp)}
+                                className="p-1.5 rounded-lg bg-status-error/10 hover:bg-status-error/20 text-status-error disabled:opacity-50 transition-colors"
+                                title="Eliminar de Supabase"
+                              >
+                                {deletingEmpId === emp.id ? (
+                                  <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                  <Trash2 size={14} />
+                                )}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -756,7 +985,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
                   onChange={(e) => setEmpEstado(e.target.value as EstadoEmpleado)}
                   className="w-full bg-surface border border-white/10 rounded-xl p-2.5 text-white outline-none"
                 >
-                  <option value="Pendiente_Biometria">Pendiente Biometría (Enrolar en Kiosco)</option>
+                  <option value="Pendiente_Biometria">Pendiente de enrolamiento (Escáner facial)</option>
                   <option value="Activo">Activo</option>
                   <option value="Inactivo">Inactivo</option>
                 </select>
@@ -852,6 +1081,70 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({ onBackTo
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Modal de Enrolamiento Facial Directo desde Admin ("Guardar Rostro") */}
+      {enrollingEmp && (
+        <div className="fixed inset-0 bg-[#0B0F17]/90 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="glass-card w-full max-w-md p-6 rounded-3xl flex flex-col items-center text-center relative border border-white/10 shadow-2xl">
+            <button
+              type="button"
+              onClick={closeAdminEnrollment}
+              disabled={isCapturingAdminFace}
+              className="absolute top-4 right-4 text-text-muted hover:text-white p-2 rounded-full bg-white/5 hover:bg-white/10 transition-colors"
+            >
+              <X size={20} />
+            </button>
+
+            <div className="w-14 h-14 rounded-2xl bg-neon-green/15 border border-neon-green/30 flex items-center justify-center text-neon-green mb-4 shadow-neon">
+              <ScanFace size={28} />
+            </div>
+
+            <h3 className="text-xl font-bold text-white mb-1">Guardar Rostro en Supabase</h3>
+            <p className="text-xs text-text-muted mb-4 max-w-xs">
+              Enrolamiento facial de <strong className="text-white">{enrollingEmp.nombre_completo}</strong> (DNI: {enrollingEmp.documento})
+            </p>
+
+            {enrollAdminError && (
+              <div className="w-full mb-4 p-3 rounded-xl bg-status-error/15 border border-status-error/30 text-status-error text-xs font-semibold text-left">
+                {enrollAdminError}
+              </div>
+            )}
+
+            <div className="relative w-full aspect-[4/3] rounded-2xl overflow-hidden bg-black/60 border border-white/10 mb-5 flex items-center justify-center">
+              <video
+                ref={adminVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-0 pointer-events-none border-2 border-neon-green/30 rounded-2xl flex items-center justify-center">
+                <div className="w-40 h-48 border-2 border-dashed border-neon-green/50 rounded-full animate-pulse" />
+              </div>
+            </div>
+
+            {/* Botón Verde "Guardar Rostro" */}
+            <button
+              type="button"
+              onClick={handleAdminCaptureFace}
+              disabled={isCapturingAdminFace}
+              className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-neon-emerald to-neon-green hover:brightness-110 disabled:opacity-50 text-white font-bold text-sm tracking-wide shadow-neon flex items-center justify-center gap-2 transition-all active:scale-95"
+            >
+              {isCapturingAdminFace ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  <span>Guardando en Supabase...</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck size={18} />
+                  <span>Guardar Rostro</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
       )}

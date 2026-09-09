@@ -4,11 +4,13 @@ import { BiometricEngine } from '@/lib/biometrics';
 
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
   process.env.VITE_SUPABASE_URL ||
   '';
 
 const supabaseAnonKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
   process.env.VITE_SUPABASE_ANON_KEY ||
   '';
 
@@ -32,7 +34,7 @@ export const supabase = createClient(
 );
 
 // ----------------------------------------------------------------------
-// DATOS MOCK / CACHE RESILIENTE (Para funcionamiento offline o local)
+// TURNOS INICIALES POR DEFECTO
 // ----------------------------------------------------------------------
 const INITIAL_TURNOS: Turno[] = [
   {
@@ -57,36 +59,6 @@ const INITIAL_TURNOS: Turno[] = [
     hora_ingreso: '22:00:00',
     hora_salida: '06:00:00',
     max_horas_extras: 2,
-    created_at: new Date().toISOString()
-  }
-];
-
-const INITIAL_EMPLEADOS: Empleado[] = [
-  {
-    id: 'e1111111-1111-1111-1111-111111111111',
-    documento: '40123456',
-    nombre_completo: 'Carlos Eduardo Ramírez',
-    turno_id: '11111111-1111-1111-1111-111111111111',
-    estado: 'Pendiente_Biometria',
-    datos_biometricos: null,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'e2222222-2222-2222-2222-222222222222',
-    documento: '38987654',
-    nombre_completo: 'María Valentina Gómez',
-    turno_id: '11111111-1111-1111-1111-111111111111',
-    estado: 'Activo',
-    datos_biometricos: new Array(128).fill(0).map((_, i) => Math.sin(i / 10)),
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'e3333333-3333-3333-3333-333333333333',
-    documento: '45678901',
-    nombre_completo: 'Alejandro Morales',
-    turno_id: '22222222-2222-2222-2222-222222222222',
-    estado: 'Pendiente_Biometria',
-    datos_biometricos: null,
     created_at: new Date().toISOString()
   }
 ];
@@ -122,7 +94,8 @@ class LocalStoreManager {
     this.setTurnos(this.getTurnos().filter(t => t.id !== id));
   }
 
-  getEmpleados(): Empleado[] { return this.get<Empleado[]>('empleados', INITIAL_EMPLEADOS); }
+  // Los empleados provienen siempre de la BD, no de mocks
+  getEmpleados(): Empleado[] { return this.get<Empleado[]>('empleados', []); }
   setEmpleados(e: Empleado[]) { this.set('empleados', e); }
   saveEmpleado(e: Empleado) {
     const list = this.getEmpleados().filter(x => x.id !== e.id);
@@ -171,26 +144,6 @@ async function syncServer(action?: string, data?: unknown) {
     console.warn('[syncServer] Error de sincronización con el servidor central:', err);
   }
   return null;
-}
-
-// Subir datos locales guardados previamente en este navegador al servidor central al cargar
-if (typeof window !== 'undefined') {
-  setTimeout(async () => {
-    try {
-      const localTurnos = LocalStore.getTurnos();
-      const localEmpleados = LocalStore.getEmpleados();
-      const localAsistencias = LocalStore.getAsistencias();
-      if (localEmpleados.length > 0 || localTurnos.length > 0) {
-        await syncServer('bulkMerge', {
-          turnos: localTurnos,
-          empleados: localEmpleados,
-          asistencias: localAsistencias,
-        });
-      }
-    } catch {
-      // Ignorar errores de conexión inicial
-    }
-  }, 400);
 }
 
 // ----------------------------------------------------------------------
@@ -326,52 +279,31 @@ export const TurnosService = {
 // ----------------------------------------------------------------------
 // SERVICIOS: EMPLEADOS
 // ----------------------------------------------------------------------
+// SERVICIOS: EMPLEADOS (Persistencia Total en Supabase)
+// ----------------------------------------------------------------------
 export const EmpleadosService = {
   async getAll(): Promise<Empleado[]> {
-    const localEmpleados = LocalStore.getEmpleados();
-    const turnos = await TurnosService.getAll();
-
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('empleados')
-          .select('*, turno:turnos(*)')
-          .order('nombre_completo');
+      const { data, error } = await supabase
+        .from('empleados')
+        .select('*, turno:turnos(*)')
+        .order('nombre_completo');
 
-        if (!error && data) {
-          const supabaseList = data as Empleado[];
-          const supabaseIds = new Set(supabaseList.map(e => e.id));
-          const localOnly = localEmpleados.filter(e => !supabaseIds.has(e.id));
-          const merged = [...supabaseList, ...localOnly];
-          LocalStore.setEmpleados(merged);
-          return merged;
-        }
-        if (error) {
-          console.warn('[EmpleadosService.getAll] Supabase retornó error:', error.message);
-        }
-      } catch (err) {
-        console.warn('[EmpleadosService.getAll] Fallo de conexión con Supabase:', err);
+      if (error) {
+        console.error('[EmpleadosService.getAll] Error consultando Supabase:', error.message);
+        throw new Error(`Error al cargar lista de empleados desde Supabase: ${error.message}`);
       }
-      return localEmpleados.map(e => ({
-        ...e,
-        turno: turnos.find(t => t.id === e.turno_id)
-      }));
+
+      return (data || []) as Empleado[];
     }
 
-    // Modo Servidor Central (Sincronizado entre computadoras y celulares)
+    // Modo Servidor Central (Fallback si Supabase no está configurado)
     const serverData = await syncServer();
     if (serverData && Array.isArray(serverData.empleados)) {
-      LocalStore.setEmpleados(serverData.empleados);
-      return serverData.empleados.map((e: Empleado) => ({
-        ...e,
-        turno: turnos.find(t => t.id === e.turno_id)
-      }));
+      return serverData.empleados as Empleado[];
     }
 
-    return localEmpleados.map(e => ({
-      ...e,
-      turno: turnos.find(t => t.id === e.turno_id)
-    }));
+    return LocalStore.getEmpleados();
   },
 
   async getByDocumento(doc: string): Promise<Empleado | null> {
@@ -379,115 +311,159 @@ export const EmpleadosService = {
     if (!cleanDoc) return null;
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('empleados')
-          .select('*, turno:turnos(*)')
-          .eq('documento', cleanDoc)
-          .maybeSingle();
+      const { data, error } = await supabase
+        .from('empleados')
+        .select('*, turno:turnos(*)')
+        .eq('documento', cleanDoc)
+        .maybeSingle();
 
-        if (!error && data) {
-          return data as Empleado;
-        }
-        if (error) {
-          console.warn('[EmpleadosService.getByDocumento] Supabase retornó error:', error.message);
-        }
-      } catch (err) {
-        console.warn('[EmpleadosService.getByDocumento] Conexión fallida con Supabase:', err);
+      if (error) {
+        console.error('[EmpleadosService.getByDocumento] Error Supabase:', error.message);
+        throw new Error(`Error al buscar empleado en Supabase: ${error.message}`);
       }
+
+      return (data as Empleado) || null;
     }
 
-    const turnos = await TurnosService.getAll();
-    let local = LocalStore.getEmpleados().find(e => e.documento === cleanDoc);
-
-    // Si no está en LocalStore, consultar al servidor central
-    if (!local) {
-      const serverData = await syncServer();
-      if (serverData && Array.isArray(serverData.empleados)) {
-        LocalStore.setEmpleados(serverData.empleados);
-        local = serverData.empleados.find((e: Empleado) => e.documento === cleanDoc);
-      }
+    const serverData = await syncServer();
+    if (serverData && Array.isArray(serverData.empleados)) {
+      const found = serverData.empleados.find((e: Empleado) => e.documento === cleanDoc);
+      if (found) return found;
     }
 
-    if (local) {
-      return {
-        ...local,
-        turno: turnos.find(t => t.id === local.turno_id)
-      };
-    }
-    return null;
+    return LocalStore.getEmpleados().find(e => e.documento === cleanDoc) || null;
   },
 
   async create(emp: Omit<Empleado, 'id' | 'created_at'>): Promise<Empleado> {
+    if (isSupabaseConfigured) {
+      const estadoInicial = emp.estado || 'Pendiente_Biometria';
+
+      // Insertar directo en Supabase sin ID para que PostgreSQL genere gen_random_uuid()
+      const insertPayload: Record<string, any> = {
+        documento: emp.documento.trim(),
+        nombre_completo: emp.nombre_completo.trim(),
+        turno_id: emp.turno_id || null,
+        estado: estadoInicial,
+        estado_biometrico: 'pendiente de enrolamiento',
+        datos_biometricos: null,
+      };
+
+      let { data, error } = await supabase
+        .from('empleados')
+        .insert([insertPayload])
+        .select('*, turno:turnos(*)')
+        .single();
+
+      // Si la columna 'estado_biometrico' no existe en la BD del usuario, reintentar sin ella
+      if (error && (error.message.includes('estado_biometrico') || error.code === '42703')) {
+        delete insertPayload.estado_biometrico;
+        const retry = await supabase
+          .from('empleados')
+          .insert([insertPayload])
+          .select('*, turno:turnos(*)')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+
+      if (error) {
+        console.error('[EmpleadosService.create] Error en Supabase:', error.message);
+        throw new Error(`Error al registrar empleado en Supabase: ${error.message}`);
+      }
+
+      const created = data as Empleado;
+      LocalStore.saveEmpleado(created);
+      return created;
+    }
+
     const newEmp: Empleado = {
       ...emp,
       id: crypto.randomUUID(),
       created_at: new Date().toISOString()
     };
-
     LocalStore.saveEmpleado(newEmp);
-
-    if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('empleados')
-          .insert([{
-            id: newEmp.id,
-            documento: emp.documento,
-            nombre_completo: emp.nombre_completo,
-            turno_id: emp.turno_id,
-            estado: emp.estado,
-            datos_biometricos: emp.datos_biometricos,
-          }])
-          .select('*, turno:turnos(*)')
-          .single();
-
-        if (!error && data) {
-          const created = data as Empleado;
-          LocalStore.saveEmpleado(created);
-          return created;
-        }
-        if (error) {
-          console.warn('[EmpleadosService.create] Error en Supabase, guardando local:', error.message);
-        }
-      } catch (err) {
-        console.warn('[EmpleadosService.create] Conexión fallida con Supabase, guardando local:', err);
-      }
-    } else {
-      // Guardar en el servidor central
-      await syncServer('saveEmpleado', newEmp);
-    }
-
+    await syncServer('saveEmpleado', newEmp);
     return newEmp;
   },
 
-  async update(id: string, updates: Partial<Empleado>): Promise<void> {
-    const current = LocalStore.getEmpleados().find(e => e.id === id);
-    const updated = current ? { ...current, ...updates } : null;
-    if (updated) {
-      LocalStore.saveEmpleado(updated);
-    }
-
+  async update(id: string, updates: Partial<Empleado>): Promise<Empleado> {
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase
-          .from('empleados')
-          .update(updates)
-          .eq('id', id);
+      const updatePayload: Record<string, any> = { ...updates };
 
-        if (error) {
-          console.warn('[EmpleadosService.update] Error en Supabase:', error.message);
-        }
-      } catch (err) {
-        console.warn('[EmpleadosService.update] Conexión fallida con Supabase:', err);
+      let { data, error } = await supabase
+        .from('empleados')
+        .update(updatePayload)
+        .eq('id', id)
+        .select('*, turno:turnos(*)')
+        .single();
+
+      if (error && (error.message.includes('estado_biometrico') || error.code === '42703')) {
+        delete updatePayload.estado_biometrico;
+        const retry = await supabase
+          .from('empleados')
+          .update(updatePayload)
+          .eq('id', id)
+          .select('*, turno:turnos(*)')
+          .single();
+        data = retry.data;
+        error = retry.error;
       }
-    } else if (updated) {
-      // Guardar en el servidor central
-      await syncServer('saveEmpleado', updated);
+
+      if (error) {
+        console.error('[EmpleadosService.update] Error en Supabase:', error.message);
+        throw new Error(`Error al actualizar empleado en Supabase: ${error.message}`);
+      }
+
+      const updated = data as Empleado;
+      LocalStore.saveEmpleado(updated);
+      return updated;
     }
+
+    const current = LocalStore.getEmpleados().find(e => e.id === id);
+    const updated = current ? { ...current, ...updates } : ({ id, ...updates } as Empleado);
+    LocalStore.saveEmpleado(updated);
+    await syncServer('saveEmpleado', updated);
+    return updated;
   },
 
-  async saveBiometrics(id: string, descriptor: number[]): Promise<void> {
+  async saveBiometrics(id: string, descriptor: number[]): Promise<Empleado> {
+    if (isSupabaseConfigured) {
+      const updatePayload: Record<string, any> = {
+        datos_biometricos: descriptor,
+        estado: 'Activo',
+        estado_biometrico: 'activo',
+      };
+
+      let { data, error } = await supabase
+        .from('empleados')
+        .update(updatePayload)
+        .eq('id', id)
+        .select('*, turno:turnos(*)')
+        .single();
+
+      if (error && (error.message.includes('estado_biometrico') || error.code === '42703')) {
+        delete updatePayload.estado_biometrico;
+        const retry = await supabase
+          .from('empleados')
+          .update(updatePayload)
+          .eq('id', id)
+          .select('*, turno:turnos(*)')
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
+
+      if (error) {
+        console.error('[EmpleadosService.saveBiometrics] Error en Supabase:', error.message);
+        throw new Error(`Error al guardar datos biométricos en Supabase: ${error.message}`);
+      }
+
+      const updated = data as Empleado;
+      LocalStore.saveEmpleado(updated);
+      return updated;
+    }
+
+    // Si Supabase no está configurado, intentar endpoint o fallback local
     if (typeof window !== 'undefined') {
       try {
         const res = await fetch('/api/empleados/enrolar', {
@@ -496,40 +472,43 @@ export const EmpleadosService = {
           body: JSON.stringify({ empleado_id: id, descriptor }),
         });
         const data = await res.json().catch(() => ({ success: false }));
-        if (res.ok && data.success) {
-          if (data.empleado) LocalStore.saveEmpleado(data.empleado);
-          return;
+        if (res.ok && data.success && data.empleado) {
+          LocalStore.saveEmpleado(data.empleado);
+          return data.empleado as Empleado;
         }
       } catch (err) {
-        console.warn('[EmpleadosService.saveBiometrics] Falló llamada API, aplicando respaldo local:', err);
+        console.warn('[EmpleadosService.saveBiometrics] Falló llamada API:', err);
       }
     }
 
-    await this.update(id, {
-      datos_biometricos: descriptor,
-      estado: 'Activo',
-    });
+    const current = LocalStore.getEmpleados().find(e => e.id === id);
+    const updated: Empleado = current
+      ? { ...current, datos_biometricos: descriptor, estado: 'Activo' }
+      : ({ id, datos_biometricos: descriptor, estado: 'Activo' } as Empleado);
+    LocalStore.saveEmpleado(updated);
+    await syncServer('saveEmpleado', updated);
+    return updated;
   },
 
   async delete(id: string): Promise<void> {
-    LocalStore.deleteEmpleado(id);
-
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase
-          .from('empleados')
-          .delete()
-          .eq('id', id);
+      const { error } = await supabase
+        .from('empleados')
+        .delete()
+        .eq('id', id);
 
-        if (error) {
-          console.warn('[EmpleadosService.delete] Error en Supabase:', error.message);
-        }
-      } catch (err) {
-        console.warn('[EmpleadosService.delete] Conexión fallida con Supabase:', err);
+      if (error) {
+        console.error('[EmpleadosService.delete] Error al eliminar en Supabase:', error.message);
+        throw new Error(`Error al eliminar empleado en Supabase: ${error.message}`);
       }
-    } else {
-      await syncServer('deleteEmpleado', { id });
+
+      // Solo limpiar el almacén local si Supabase confirmó que se borró con éxito
+      LocalStore.deleteEmpleado(id);
+      return;
     }
+
+    LocalStore.deleteEmpleado(id);
+    await syncServer('deleteEmpleado', { id });
   }
 };
 

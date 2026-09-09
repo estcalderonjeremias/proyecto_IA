@@ -72,21 +72,34 @@ export async function POST(request: NextRequest) {
       }
 
       if (existingEmployee) {
-        const updates: Partial<Empleado> = {
+        const updates: Record<string, any> = {
           datos_biometricos: parsedVector,
           estado: 'Activo',
+          estado_biometrico: 'activo',
         };
         if (nombre_completo && String(nombre_completo).trim()) {
           updates.nombre_completo = String(nombre_completo).trim();
         }
         if (turno_id !== undefined) updates.turno_id = turno_id || null;
 
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from('empleados')
           .update(updates)
           .eq('id', existingEmployee.id)
           .select('*, turno:turnos(*)')
           .single();
+
+        if (error && (error.message.includes('estado_biometrico') || error.code === '42703')) {
+          delete updates.estado_biometrico;
+          const retry = await supabase
+            .from('empleados')
+            .update(updates)
+            .eq('id', existingEmployee.id)
+            .select('*, turno:turnos(*)')
+            .single();
+          data = retry.data;
+          error = retry.error;
+        }
 
         if (error) {
           return NextResponse.json(

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Empleado } from '@/types/database';
 import { sounds } from '@/lib/sound';
-import { isSupabaseConfigured, LocalStore } from '@/lib/supabaseClient';
+import { isSupabaseConfigured, LocalStore, EmpleadosService } from '@/lib/supabaseClient';
 import {
   CheckCircle2,
   UserCheck,
@@ -135,44 +135,43 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
       if (snapshot) setPreviewPhoto(snapshot);
 
-      // ── Paso 3: Persistir (Supabase o local) ──
+      // ── Paso 3: Persistir directamente en Supabase ──
       setStep('saving');
 
-      // El objeto actualizado con biometría y estado Activo
-      const updated: Empleado = {
-        ...empleado,
-        datos_biometricos: descriptor,
-        estado: 'Activo',
-      };
+      let updated: Empleado;
 
-      // Llamar a la API route en el servidor para persistir la biometría y estado Activo
-      const enrollRes = await fetch('/api/empleados/enrolar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          empleado_id: empleado.id,
-          documento: empleado.documento,
-          nombre_completo: empleado.nombre_completo,
-          turno_id: empleado.turno_id,
-          descriptor,
-        }),
-      });
+      if (isSupabaseConfigured) {
+        // UPDATE directo en Supabase filtrando por id del empleado
+        updated = await EmpleadosService.saveBiometrics(empleado.id, descriptor);
+      } else {
+        // Modo API fallback si no hay cliente Supabase directo configurado
+        const enrollRes = await fetch('/api/empleados/enrolar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            empleado_id: empleado.id,
+            documento: empleado.documento,
+            nombre_completo: empleado.nombre_completo,
+            turno_id: empleado.turno_id,
+            descriptor,
+          }),
+        });
 
-      const enrollData = await enrollRes.json().catch(() => ({ success: false, message: 'Error al leer la respuesta del servidor.' }));
+        const enrollData = await enrollRes.json().catch(() => ({ success: false, message: 'Error al leer la respuesta del servidor.' }));
 
-      if (!enrollRes.ok || !enrollData.success) {
-        throw new Error(
-          enrollData.message || `Error del servidor (${enrollRes.status}) al guardar la biometría.`
-        );
+        if (!enrollRes.ok || !enrollData.success) {
+          throw new Error(
+            enrollData.message || `Error del servidor (${enrollRes.status}) al guardar la biometría.`
+          );
+        }
+
+        updated = enrollData.empleado || {
+          ...empleado,
+          datos_biometricos: descriptor,
+          estado: 'Activo',
+        };
       }
 
-      // Actualizar datos devueltos por el servidor preservando el ID
-      if (enrollData.empleado) {
-        Object.assign(updated, enrollData.empleado, { id: empleado.id });
-      }
-
-      // Siempre actualizar el LocalStore del cliente con el empleado original
-      // (en modo local esto es la única persistencia; en modo Supabase es el cache local)
       LocalStore.saveEmpleado(updated);
 
       // ── Paso 4: Éxito ──
@@ -181,10 +180,8 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
       confetti({ particleCount: 80, spread: 70, origin: { y: 0.55 } });
       setStep('success');
 
-      // Notificar al padre después de mostrar el mensaje de éxito
-      setTimeout(() => {
-        onSuccess(updated);
-      }, 2200);
+      // Refrescar el estado en el cliente inmediatamente para que en la lista se vea 'Activo'
+      onSuccess(updated);
     } catch (err: unknown) {
       console.error('[OnboardingModal] Error durante el enrolamiento:', err);
       sounds.playError();
@@ -335,7 +332,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
             className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-neon-emerald to-neon-green hover:brightness-110 text-white font-bold text-sm tracking-wide shadow-neon flex items-center justify-center gap-2 transition-all active:scale-95"
           >
             <ShieldCheck size={20} />
-            Capturar y Guardar Rostro
+            Guardar Rostro
           </button>
         )}
 
