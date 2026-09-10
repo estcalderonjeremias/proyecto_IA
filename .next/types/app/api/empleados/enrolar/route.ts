@@ -1,4 +1,4 @@
-// File: C:\Users\PC-1\Desktop\programa\proyecto_IA-1\app\api\empleados\enrolar\route.ts
+// File: C:\Users\PC-1\Desktop\programacion\Assisty\app\api\empleados\enrolar\route.ts
 import * as entry from '../../../../../../app/api/empleados/enrolar/route.js'
 import type { NextRequest } from 'next/server.js'
 

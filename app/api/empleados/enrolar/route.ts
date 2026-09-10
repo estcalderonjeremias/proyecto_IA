@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
           nombre_completo: (nombre_completo && String(nombre_completo).trim()) || `Empleado DNI ${cleanDoc}`,
           turno_id: turno_id || null,
           estado: 'Activo',
+          estado_biometrico: 'activo',
           datos_biometricos: parsedVector,
         }])
         .select('*, turno:turnos(*)')
@@ -158,6 +159,7 @@ export async function POST(request: NextRequest) {
         ...existingLocal,
         datos_biometricos: parsedVector,
         estado: 'Activo',
+        estado_biometrico: 'activo',
         ...(nombre_completo && String(nombre_completo).trim()
           ? { nombre_completo: String(nombre_completo).trim() }
           : {}),
@@ -183,6 +185,7 @@ export async function POST(request: NextRequest) {
       nombre_completo: (nombre_completo && String(nombre_completo).trim()) || `Empleado DNI ${cleanDoc}`,
       turno_id: turno_id || null,
       estado: 'Activo',
+      estado_biometrico: 'activo',
       datos_biometricos: parsedVector,
       created_at: new Date().toISOString(),
     };

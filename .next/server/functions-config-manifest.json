@@ -1,1 +1,1 @@
-{"version":1,"functions":{"/api/biometrics/enroll":{},"/api/camera-proxy":{},"/api/biometrics/verify":{},"/api/empleados/enrolar":{},"/api/fichar":{},"/api/sync":{}}}
+{"version":1,"functions":{"/api/biometrics/enroll":{},"/api/biometrics/verify":{},"/api/sync":{},"/api/empleados/enrolar":{},"/api/camera-proxy":{},"/api/fichar":{}}}

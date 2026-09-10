@@ -2,24 +2,58 @@ import { createClient } from '@supabase/supabase-js';
 import { Turno, Empleado, Asistencia, EstadoFichaje } from '@/types/database';
 import { BiometricEngine } from '@/lib/biometrics';
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL ||
-  process.env.SUPABASE_URL ||
-  process.env.VITE_SUPABASE_URL ||
-  '';
+function resolveSupabaseConfig() {
+  let url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    '';
 
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  '';
+  let anonKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    '';
 
-export const isSupabaseConfigured = Boolean(
-  supabaseUrl &&
-  supabaseAnonKey &&
-  !supabaseUrl.includes('placeholder-project') &&
-  !supabaseAnonKey.includes('placeholder-anon-key')
-);
+  // Permitir credenciales guardadas en el navegador en Vercel
+  if (typeof window !== 'undefined') {
+    const customUrl = localStorage.getItem('bioaccess_supabase_url');
+    const customKey = localStorage.getItem('bioaccess_supabase_anon_key');
+    if (customUrl && (!url || url.includes('placeholder-project'))) url = customUrl;
+    if (customKey && (!anonKey || anonKey.includes('placeholder-anon-key'))) anonKey = customKey;
+  }
+
+  const isConfigured = Boolean(
+    url &&
+    anonKey &&
+    !url.includes('placeholder-project') &&
+    !anonKey.includes('placeholder-anon-key')
+  );
+
+  return { url, anonKey, isConfigured };
+}
+
+const config = resolveSupabaseConfig();
+export const supabaseUrl = config.url;
+export const supabaseAnonKey = config.anonKey;
+export const isSupabaseConfigured = config.isConfigured;
+
+// Guardar credenciales de Supabase desde la UI para Vercel
+export function saveCustomSupabaseConfig(url: string, anonKey: string) {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('bioaccess_supabase_url', url.trim());
+    localStorage.setItem('bioaccess_supabase_anon_key', anonKey.trim());
+    window.location.reload();
+  }
+}
+
+export function clearCustomSupabaseConfig() {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('bioaccess_supabase_url');
+    localStorage.removeItem('bioaccess_supabase_anon_key');
+    window.location.reload();
+  }
+}
 
 // Cliente oficial de Supabase conectado directamente a PostgreSQL en la nube
 export const supabase = createClient(
@@ -94,8 +128,16 @@ class LocalStoreManager {
     this.setTurnos(this.getTurnos().filter(t => t.id !== id));
   }
 
-  // Los empleados provienen siempre de la BD, no de mocks
-  getEmpleados(): Empleado[] { return this.get<Empleado[]>('empleados', []); }
+  // Los empleados provienen siempre de Supabase sin mocks
+  getEmpleados(): Empleado[] {
+    const list = this.get<Empleado[]>('empleados', []);
+    // Filtrar cualquier empleado mock previo por ID
+    const cleaned = list.filter(e => !e.id.startsWith('e1111111') && !e.id.startsWith('e2222222') && !e.id.startsWith('e3333333'));
+    if (cleaned.length !== list.length) {
+      this.set('empleados', cleaned);
+    }
+    return cleaned;
+  }
   setEmpleados(e: Empleado[]) { this.set('empleados', e); }
   saveEmpleado(e: Empleado) {
     const list = this.getEmpleados().filter(x => x.id !== e.id);
@@ -379,6 +421,9 @@ export const EmpleadosService = {
     const newEmp: Empleado = {
       ...emp,
       id: crypto.randomUUID(),
+      estado: emp.estado || 'Pendiente_Biometria',
+      estado_biometrico: 'pendiente de enrolamiento',
+      datos_biometricos: null,
       created_at: new Date().toISOString()
     };
     LocalStore.saveEmpleado(newEmp);
@@ -483,8 +528,8 @@ export const EmpleadosService = {
 
     const current = LocalStore.getEmpleados().find(e => e.id === id);
     const updated: Empleado = current
-      ? { ...current, datos_biometricos: descriptor, estado: 'Activo' }
-      : ({ id, datos_biometricos: descriptor, estado: 'Activo' } as Empleado);
+      ? { ...current, datos_biometricos: descriptor, estado: 'Activo', estado_biometrico: 'activo' }
+      : ({ id, datos_biometricos: descriptor, estado: 'Activo', estado_biometrico: 'activo' } as Empleado);
     LocalStore.saveEmpleado(updated);
     await syncServer('saveEmpleado', updated);
     return updated;

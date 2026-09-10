@@ -243,7 +243,13 @@ export const KioskScreen: React.FC = () => {
         return;
       }
 
-      if (empleado.estado === 'Pendiente_Biometria' || !empleado.datos_biometricos) {
+      const needsEnrollment =
+        empleado.estado === 'Pendiente_Biometria' ||
+        empleado.estado === 'pendiente de enrolamiento' ||
+        empleado.estado_biometrico === 'pendiente de enrolamiento' ||
+        !empleado.datos_biometricos;
+
+      if (needsEnrollment) {
         setVisualState('onboarding');
         setEnrollingEmpleado(empleado);
         return;

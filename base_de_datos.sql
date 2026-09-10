@@ -10,12 +10,12 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ------------------------------------------------------------------------------
--- 2. LIMPIEZA / ELIMINACIÓN DE TABLAS (Opcional - Descomentar si se requiere resetear)
+-- 2. LIMPIEZA DE DATOS (EJECUTAR EN SUPABASE SQL EDITOR SI DESEAS BORRAR TODOS LOS USUARIOS)
 -- ------------------------------------------------------------------------------
--- DROP TABLE IF EXISTS public.asistencias CASCADE;
--- DROP TABLE IF EXISTS public.empleados CASCADE;
--- DROP TABLE IF EXISTS public.turnos CASCADE;
--- DROP TABLE IF EXISTS public.administradores CASCADE;
+-- Para borrar todos los usuarios y asistencias existentes y empezar de cero:
+-- TRUNCATE TABLE public.asistencias CASCADE;
+-- DELETE FROM public.empleados;
+
 
 -- ------------------------------------------------------------------------------
 -- 3. CREACIÓN DE TABLAS

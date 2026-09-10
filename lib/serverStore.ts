@@ -38,35 +38,7 @@ const INITIAL_TURNOS: Turno[] = [
   }
 ];
 
-const INITIAL_EMPLEADOS: Empleado[] = [
-  {
-    id: 'e1111111-1111-1111-1111-111111111111',
-    documento: '40123456',
-    nombre_completo: 'Carlos Eduardo Ramírez',
-    turno_id: '11111111-1111-1111-1111-111111111111',
-    estado: 'Pendiente_Biometria',
-    datos_biometricos: null,
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'e2222222-2222-2222-2222-222222222222',
-    documento: '38987654',
-    nombre_completo: 'María Valentina Gómez',
-    turno_id: '11111111-1111-1111-1111-111111111111',
-    estado: 'Activo',
-    datos_biometricos: new Array(128).fill(0).map((_, i) => Math.sin(i / 10)),
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'e3333333-3333-3333-3333-333333333333',
-    documento: '45678901',
-    nombre_completo: 'Alejandro Morales',
-    turno_id: '22222222-2222-2222-2222-222222222222',
-    estado: 'Pendiente_Biometria',
-    datos_biometricos: null,
-    created_at: new Date().toISOString()
-  }
-];
+const INITIAL_EMPLEADOS: Empleado[] = [];
 
 function ensureDataDir(): void {
   if (!fs.existsSync(DATA_DIR)) {

@@ -94,7 +94,13 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Verificar biometría registrada
-    if (empleado.estado === 'Pendiente_Biometria' || !empleado.datos_biometricos) {
+    const isPending =
+      empleado.estado === 'Pendiente_Biometria' ||
+      empleado.estado === 'pendiente de enrolamiento' ||
+      empleado.estado_biometrico === 'pendiente de enrolamiento' ||
+      !empleado.datos_biometricos;
+
+    if (isPending) {
       return NextResponse.json(
         {
           success: false,

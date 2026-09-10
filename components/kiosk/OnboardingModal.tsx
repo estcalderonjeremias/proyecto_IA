@@ -169,6 +169,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
           ...empleado,
           datos_biometricos: descriptor,
           estado: 'Activo',
+          estado_biometrico: 'activo',
         };
       }
 
