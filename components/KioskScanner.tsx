@@ -62,6 +62,9 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
         const faceapi = await import('@vladmandic/face-api');
         faceapiRef.current = faceapi;
 
+        await faceapi.tf.setBackend('webgl');
+        await faceapi.tf.ready();
+
         const MODEL_URL = '/models';
         await Promise.all([
           faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
@@ -150,15 +153,15 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
         const constraints: MediaStreamConstraints = {
           video: chosenDeviceId
             ? {
-                deviceId: { exact: chosenDeviceId },
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-              }
+              deviceId: { exact: chosenDeviceId },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+            }
             : {
-                facingMode: 'user',
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-              },
+              facingMode: 'user',
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+            },
           audio: false,
         };
 
@@ -169,7 +172,7 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
           videoRef.current.srcObject = stream;
           videoRef.current.onloadedmetadata = () => {
             if (videoRef.current) {
-              videoRef.current.play().catch(() => {});
+              videoRef.current.play().catch(() => { });
               onVideoReady?.(videoRef.current);
             }
           };
@@ -332,17 +335,15 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
           playsInline
           muted
           autoPlay
-          className={`w-full h-full object-cover transition-transform duration-300 ${
-            isMirrored ? 'scale-x-[-1]' : 'scale-x-100'
-          }`}
+          className={`w-full h-full object-cover transition-transform duration-300 ${isMirrored ? 'scale-x-[-1]' : 'scale-x-100'
+            }`}
         />
 
         {/* Canvas de Bounding Box y Landmarks */}
         <canvas
           ref={canvasRef}
-          className={`absolute inset-0 w-full h-full pointer-events-none ${
-            isMirrored ? 'scale-x-[-1]' : 'scale-x-100'
-          }`}
+          className={`absolute inset-0 w-full h-full pointer-events-none ${isMirrored ? 'scale-x-[-1]' : 'scale-x-100'
+            }`}
         />
 
         {/* Línea Láser Animada de Escaneo */}
@@ -355,11 +356,10 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
         {/* HUD Targeting Overlay central */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
           <div
-            className={`w-56 h-72 sm:w-64 sm:h-80 rounded-3xl border-2 transition-all duration-300 flex flex-col justify-between p-4 ${
-              faceDetected
+            className={`w-56 h-72 sm:w-64 sm:h-80 rounded-3xl border-2 transition-all duration-300 flex flex-col justify-between p-4 ${faceDetected
                 ? 'border-neon-green/90 shadow-[0_0_25px_rgba(34,197,94,0.35)] scale-102'
                 : 'border-white/20 border-dashed opacity-60'
-            }`}
+              }`}
           >
             <div className="flex justify-between items-center text-[10px] font-mono uppercase tracking-widest text-text-dim">
               <span>{faceDetected ? 'BIO-LOCK' : 'SEARCHING'}</span>
@@ -369,9 +369,8 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
             <div className="flex justify-center">
               <ScanFace
                 size={40}
-                className={`transition-colors duration-300 ${
-                  faceDetected ? 'text-neon-green animate-pulse' : 'text-white/20'
-                }`}
+                className={`transition-colors duration-300 ${faceDetected ? 'text-neon-green animate-pulse' : 'text-white/20'
+                  }`}
               />
             </div>
 
@@ -422,11 +421,10 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
         <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
           {/* Badge Camo Studio */}
           <div
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider backdrop-blur-md border ${
-              isCamoDetected
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider backdrop-blur-md border ${isCamoDetected
                 ? 'bg-neon-emerald/20 text-neon-green border-neon-green/40 shadow-neon'
                 : 'bg-black/60 text-text-muted border-white/10'
-            }`}
+              }`}
           >
             <Camera size={12} />
             {isCamoDetected ? 'Camo Conectado' : 'Cámara Web'}
@@ -481,11 +479,10 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
                       startCamera(d.deviceId);
                       setShowConfig(false);
                     }}
-                    className={`w-full text-left px-2.5 py-2 rounded-xl text-[11px] transition-all flex items-center justify-between border ${
-                      isSelected
+                    className={`w-full text-left px-2.5 py-2 rounded-xl text-[11px] transition-all flex items-center justify-between border ${isSelected
                         ? 'bg-neon-green/20 text-neon-green border-neon-green/40 font-bold'
                         : 'bg-white/5 text-text-muted hover:bg-white/10 border-white/5'
-                    }`}
+                      }`}
                   >
                     <span className="truncate pr-2">{d.label || `Cámara ${idx + 1}`}</span>
                     {isCamo && (
@@ -503,11 +500,10 @@ export const KioskScanner: React.FC<KioskScannerProps> = ({
         {/* Badge Inferior de Reconocimiento */}
         <div className="absolute bottom-3 inset-x-3 z-20 flex items-center justify-between">
           <div
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-md border transition-colors ${
-              faceDetected
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-md border transition-colors ${faceDetected
                 ? 'bg-neon-emerald/25 text-neon-green border-neon-green/40 shadow-neon'
                 : 'bg-surface/80 text-text-muted border-white/10'
-            }`}
+              }`}
           >
             {faceDetected ? (
               <>
